@@ -4,7 +4,7 @@
 
 # Ivalice Trainer
 
-**A single-player trainer for FINAL FANTASY TACTICS - The Ivalice Chronicles on Windows.**
+**A free trainer and cheat tool for FFT: The Ivalice Chronicles (FINAL FANTASY TACTICS) on PC. No ads, no account.**
 
 <p align="center">
   <strong>English</strong> |

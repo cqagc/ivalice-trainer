@@ -4,7 +4,7 @@
 
 # Ivalice Trainer
 
-**FINAL FANTASY TACTICS - The Ivalice Chronicles 的单机修改器，Windows 桌面程序。**
+**《最终幻想战略版 伊瓦利斯编年史》（FFT: The Ivalice Chronicles）PC 修改器，免费开源，无广告，不需要账号。**
 
 <p align="center">
   <a href="README.md">English</a> |
