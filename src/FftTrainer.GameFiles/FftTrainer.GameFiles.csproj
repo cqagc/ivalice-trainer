@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 读游戏封包（.pac）和 Nex 表（.nxd）。ThirdParty/FF16Tools 是 Nenkai/FF16Tools 的源码子集（MIT），见其中 README.md。 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- 第三方源码保持原样，不为它的可空注解刷警告 -->
+    <NoWarn>$(NoWarn);CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625;CS8765;CS0168;CS0219;CS1998</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.HighPerformance" Version="8.4.0" />
+    <PackageReference Include="Syroot.BinaryData" Version="5.2.2" />
+    <PackageReference Include="Syroot.BinaryData.Memory" Version="5.2.2" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.1" />
+    <!-- 只用托管部分：DirectStorage 原生库借用游戏目录自带的 dstorage.dll / dstoragecore.dll，不随修改器分发 -->
+    <PackageReference Include="Vortice.DirectStorage" Version="3.8.3" ExcludeAssets="native" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Nex 表结构定义，来自 Nenkai/fftivc-nex-layouts（MIT），按程序目录下 Nex/Layouts/ffto/ 查找 -->
+    <None Include="Nex\Layouts\ffto\*.layout" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

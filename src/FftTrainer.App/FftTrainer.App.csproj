@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\app.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FftTrainer.Core/FftTrainer.Core.csproj" />
+  </ItemGroup>
+  <Target Name="CopyPortraits" AfterTargets="Build" Condition="'$(FftAssets)' != '' And Exists('$(FftAssets)\portraits')">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\scripts\copy_portraits.ps1&quot; -OutputDirectory &quot;$(TargetDir).&quot; -AssetsDirectory &quot;$(FftAssets)&quot;" />
+  </Target>
+</Project>

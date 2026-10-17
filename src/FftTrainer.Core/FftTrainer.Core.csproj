@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FftTrainer.GameFiles/FftTrainer.GameFiles.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 界面文字：Locales/<区域>.<语言>.json，资源名 Locales.<区域>.<语言>.json -->
+    <EmbeddedResource Include="Locales\*.json" LogicalName="Locales.%(Filename)%(Extension)" WithCulture="false" />
+  </ItemGroup>
+</Project>
