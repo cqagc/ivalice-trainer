@@ -104,7 +104,7 @@ Unit, job, item and ability names are read at runtime from the game files on you
 
 Return to the world map or the unit list before writing unit edits; changes written while a shop or the unit screen is open can be overwritten by the game when you leave it. Use the language menu in the title bar to switch languages.
 
-Source builds include single-instance protection within the same Windows login session: opening another copy requests activation of the existing window instead of starting another trainer. This also applies to copies in different directories. Close older versions before upgrading, because they do not participate in the lock. Window activation remains subject to Windows foreground restrictions.
+Version 0.1.1 and later include single-instance protection within the same Windows login session: opening another copy requests activation of the existing window instead of starting another trainer. This also applies to copies in different directories. Close older versions before upgrading, because they do not participate in the lock. Window activation remains subject to Windows foreground restrictions.
 
 ---
 

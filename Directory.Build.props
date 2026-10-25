@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <!-- 编译产物里不留本机路径：源码路径映射成 /_/，并做确定性构建 -->
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Deterministic>true</Deterministic>
     <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))=/_/</PathMap>
   </PropertyGroup>
