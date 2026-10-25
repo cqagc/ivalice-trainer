@@ -287,6 +287,104 @@ public sealed partial class TrainerTests
             Assert.Equal(before[field], after[field]);
     }
 
+    [Theory]
+    [InlineData(2752, 9999, 2805, 9999, 3282, 9999)]
+    [InlineData(2752, 9980, 2805, 9999, 3282, 9999)]
+    [InlineData(9999, 1000, 9999, 1053, 9999, 1530)]
+    [InlineData(9980, 1000, 9999, 1053, 9999, 1530)]
+    [InlineData(9980, 9980, 9999, 9999, 9999, 9999)]
+    public void BattleRewardsUseUncappedJpDelta(ushort oldCurrent, ushort oldTotal,
+        ushort current, ushort total, ushort expectedCurrent, ushort expectedTotal)
+    {
+        var memory = BattleFixture();
+        var start = BattleUnit.Start + 16 * BattleUnit.Stride;
+        SeedReward(memory, 16, 0, oldCurrent, oldTotal);
+        var rewards = new BattleRewards();
+        rewards.Configure(1, 10);
+        RewardTick(memory, rewards);
+        SeedReward(memory, 16, 0, current, total);
+        RewardTick(memory, rewards);
+        Assert.Null(rewards.Notice);
+        Assert.Equal(expectedCurrent, BinaryPrimitives.ReadUInt16LittleEndian(memory.ReadBytes(start + 0xF0, 2)));
+        Assert.Equal(expectedTotal, BinaryPrimitives.ReadUInt16LittleEndian(memory.ReadBytes(start + 0x11E, 2)));
+        var writes = memory.WriteCount;
+        RewardTick(memory, rewards);
+        RewardTick(memory, rewards);
+        Assert.Equal(writes, memory.WriteCount);
+    }
+
+    [Theory]
+    [InlineData(9999, 9999, 9999, 9999)]
+    [InlineData(2752, 9999, 2700, 9999)]
+    [InlineData(2752, 9980, 2700, 9999)]
+    [InlineData(2752, 9999, 2805, 9980)]
+    [InlineData(2752, 9900, 2805, 9900)]
+    public void BattleRewardsSkipFullJpSpendingRollbackAndUnconfirmedGains(ushort oldCurrent,
+        ushort oldTotal, ushort current, ushort total)
+    {
+        var memory = BattleFixture();
+        SeedReward(memory, 16, 0, oldCurrent, oldTotal);
+        var rewards = new BattleRewards();
+        rewards.Configure(1, 10);
+        RewardTick(memory, rewards);
+        SeedReward(memory, 16, 0, current, total);
+        RewardTick(memory, rewards);
+        RewardTick(memory, rewards);
+        Assert.Null(rewards.Notice);
+        Assert.Equal(0, memory.WriteCount);
+    }
+
+    [Fact]
+    public void BattleRewardsContinueAfterCappedTotalAndTraceCurrentOnlyGains()
+    {
+        var memory = BattleFixture();
+        var start = BattleUnit.Start + 16 * BattleUnit.Stride;
+        SeedReward(memory, 16, 13, 2752, 9999);
+        var rewards = new BattleRewards();
+        rewards.Configure(1, 10);
+        RewardTick(memory, rewards);
+        SeedReward(memory, 16, 13, 2805, 9999);
+        RewardTick(memory, rewards);
+        Assert.Equal(3282, BinaryPrimitives.ReadUInt16LittleEndian(memory.ReadBytes(start + 0x10A, 2)));
+        Assert.Contains(rewards.Trace, line => line.Contains("job 13 JP 2752->2805 total 9999->9999 multiplier=10"));
+        rewards.Trace.Clear();
+        var writes = memory.WriteCount;
+        RewardTick(memory, rewards);
+        Assert.Equal(writes, memory.WriteCount);
+        Assert.Empty(rewards.Trace);
+        SeedReward(memory, 16, 13, 3335, 9999);
+        RewardTick(memory, rewards);
+        Assert.Equal(3812, BinaryPrimitives.ReadUInt16LittleEndian(memory.ReadBytes(start + 0x10A, 2)));
+        Assert.Equal(9999, BinaryPrimitives.ReadUInt16LittleEndian(memory.ReadBytes(start + 0x138, 2)));
+    }
+
+    [Fact]
+    public void BattleRewardsMultiplyCappedSharedJpAndPreservePackedJobLevels()
+    {
+        var memory = BattleFixture();
+        var start = BattleUnit.Start + 16 * BattleUnit.Stride;
+        SeedReward(memory, 16, 0, 2752, 9999);
+        SeedReward(memory, 16, 1, 90, 190);
+        SeedReward(memory, 17, 0, 100, 9999);
+        memory.Seed(start + 0xE4, [0x81]);
+        var rewards = new BattleRewards();
+        rewards.Configure(1, 10);
+        RewardTick(memory, rewards);
+        SeedReward(memory, 16, 0, 2805, 9999);
+        SeedReward(memory, 16, 1, 100, 200);
+        SeedReward(memory, 17, 0, 110, 9999);
+        RewardTick(memory, rewards);
+        Assert.Null(rewards.Notice);
+        Assert.Equal(3282, BinaryPrimitives.ReadUInt16LittleEndian(memory.ReadBytes(start + 0xF0, 2)));
+        Assert.Equal(190, BinaryPrimitives.ReadUInt16LittleEndian(memory.ReadBytes(start + 0xF2, 2)));
+        Assert.Equal(290, BinaryPrimitives.ReadUInt16LittleEndian(memory.ReadBytes(start + 0x120, 2)));
+        Assert.Equal(0x82, memory.ReadBytes(start + 0xE4, 1)[0]);
+        Assert.Equal(200, BinaryPrimitives.ReadUInt16LittleEndian(memory.ReadBytes(BattleUnit.Start + 17 * BattleUnit.Stride + 0xF0, 2)));
+        var writes = memory.WriteCount;
+        RewardTick(memory, rewards);
+        Assert.Equal(writes, memory.WriteCount);
+    }
+
     [Fact]
     public void BattleRewardsSkipSpendingAndIdentityChangesButKeepJpOnLevelUp()
     {

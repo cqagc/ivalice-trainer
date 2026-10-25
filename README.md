@@ -104,6 +104,8 @@ Unit, job, item and ability names are read at runtime from the game files on you
 
 Return to the world map or the unit list before writing unit edits; changes written while a shop or the unit screen is open can be overwritten by the game when you leave it. Use the language menu in the title bar to switch languages.
 
+Source builds include single-instance protection within the same Windows login session: opening another copy requests activation of the existing window instead of starting another trainer. This also applies to copies in different directories. Close older versions before upgrading, because they do not participate in the lock. Window activation remains subject to Windows foreground restrictions.
+
 ---
 
 <a id="development"></a>
@@ -117,7 +119,10 @@ git clone https://github.com/cqagc/ivalice-trainer.git
 cd ivalice-trainer
 dotnet build src/FftTrainer.App/FftTrainer.App.csproj -c Release
 dotnet test tests/FftTrainer.Core.Tests/FftTrainer.Core.Tests.csproj -c Release
+dotnet run --project tests/FftTrainer.SingleInstance.Harness/FftTrainer.SingleInstance.Harness.csproj -c Release
 ```
+
+The single-instance harness uses isolated test lock names and never connects to the game. It checks duplicate launches, cross-directory copies, concurrent startup, normal exit, crash recovery and unresponsive owners.
 
 | Directory | Contents |
 |---|---|

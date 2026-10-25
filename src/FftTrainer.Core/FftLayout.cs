@@ -349,12 +349,16 @@ public sealed class BattleRewards
             // 升级那一帧：JP 照常放大，只跳过经验（升级时 EXP 被游戏清零，差值没有意义）
             if (!baselines.TryGetValue(unit.Slot, out var previous) || previous.Identity != unit.Identity)
             {
-                if (previous != null && (previous.Data[0x28] != unit.Data[0x28] || !previous.Data.AsSpan(0x11E, 40).SequenceEqual(unit.Data.AsSpan(0x11E, 40))))
+                if (previous != null && (previous.Data[0x28] != unit.Data[0x28]
+                    || !previous.Data.AsSpan(0xF0, 40).SequenceEqual(unit.Data.AsSpan(0xF0, 40))
+                    || !previous.Data.AsSpan(0x11E, 40).SequenceEqual(unit.Data.AsSpan(0x11E, 40))))
                     Trace.Add($"slot {unit.Slot}: 重建基线 identityChanged={previous.Identity != unit.Identity} level {previous.Data[0x29]}->{unit.Data[0x29]}");
                 baselines[unit.Slot] = next;
                 continue;
             }
-            var changed = previous.Data[0x28] != unit.Data[0x28] || !previous.Data.AsSpan(0x11E, 40).SequenceEqual(unit.Data.AsSpan(0x11E, 40));
+            var changed = previous.Data[0x28] != unit.Data[0x28]
+                || !previous.Data.AsSpan(0xF0, 40).SequenceEqual(unit.Data.AsSpan(0xF0, 40))
+                || !previous.Data.AsSpan(0x11E, 40).SequenceEqual(unit.Data.AsSpan(0x11E, 40));
             var edits = new List<MemoryEdit>();
             void Add(int field, int width, uint value)
             {
@@ -370,12 +374,20 @@ public sealed class BattleRewards
                     continue;
                 var current = unit.Read(0xF0 + job * 2, 2);
                 var total = unit.Read(0x11E + job * 2, 2);
+                var oldCurrent = previous.Read(0xF0 + job * 2, 2);
                 var oldTotal = previous.Read(0x11E + job * 2, 2);
-                if (total <= oldTotal || current < previous.Read(0xF0 + job * 2, 2))
+                if (current != oldCurrent || total != oldTotal)
+                    Trace.Add($"slot {unit.Slot}: job {job} JP {oldCurrent}->{current} total {oldTotal}->{total} multiplier={JpMultiplier}");
+                // 消费 / 回退不补；累计未封顶时仍需累计增长，避免把当前 JP 单独恢复当作奖励。
+                if (current < oldCurrent || total < oldTotal || (total == oldTotal && total != 9999))
+                    continue;
+                // 两种 JP 各自封顶：取较大的正差，不能用被 9999 截断的那一项算奖励。
+                var gain = Math.Max(current - oldCurrent, total - oldTotal);
+                if (gain == 0)
                     continue;
                 var field = 0xE4 + job / 2;
                 var reward = JobProgress.Grant(current, total, next.Data[field], job,
-                    checked((int)(total - oldTotal) * (JpMultiplier - 1)));
+                    checked((int)gain * (JpMultiplier - 1)));
                 Add(0xF0 + job * 2, 2, reward.Current);
                 Add(0x11E + job * 2, 2, reward.Total);
                 next.Data[field] = reward.LevelByte;
