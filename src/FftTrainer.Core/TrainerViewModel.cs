@@ -52,8 +52,9 @@ public sealed class EditableField : ObservableObject
     public RelayCommand Maximize { get; }
     public uint Original => original;
     public bool IsDirty => value != original;
-    public bool IsDanger => Key == "Brave" && value < 10 || Key == "Faith" && value > 94;
-    public string DangerNote => Key == "Brave"
+    public bool IsDanger => Key == "Learn" || SecondaryHack != null || Key == "Brave" && value < 10 || Key == "Faith" && value > 94;
+    public string DangerNote => Key == "Learn" ? Localizer.T("core.learn.warning")
+        : SecondaryHack != null ? Localizer.T("core.skill.hackWarning") : Key == "Brave"
         ? Localizer.T("core.field.braveDanger")
         : Localizer.T("core.field.faithDanger");
     public string? Error
@@ -64,6 +65,29 @@ public sealed class EditableField : ObservableObject
     public bool HasError => Error != null;
     public BattleIdentity? BattleIdentity { get; set; }
     public SkillIdentity? SkillIdentity { get; set; }
+    public SecondarySkillAuthorization? SecondaryHack { get; private set; }
+    public SkillLearningAuthorization? LearningHack { get; private set; }
+    internal void SetLearningHack(SkillLearningAuthorization? authorization)
+    {
+        if (LearningHack == authorization) return;
+        LearningHack?.Revoke();
+        LearningHack = authorization;
+        Notify(nameof(LearningHack));
+        Notify(nameof(IsDanger));
+        Notify(nameof(DangerNote));
+        RefreshDescription();
+    }
+    internal void SetSecondaryHack(SecondarySkillAuthorization? authorization)
+    {
+        if (SecondaryHack == authorization)
+            return;
+        SecondaryHack?.Revoke();
+        SecondaryHack = authorization;
+        Notify(nameof(SecondaryHack));
+        Notify(nameof(IsDanger));
+        Notify(nameof(DangerNote));
+        RefreshDescription();
+    }
     public Func<string>? ChangeDescription { get; set; }
     public void RefreshDescription() => Notify(nameof(ChangeText));
     public void RefreshText()
@@ -127,7 +151,7 @@ public sealed class EditableField : ObservableObject
     public void Refresh(uint current)
     {
         latest = current;
-        if (IsDirty || IsEditing)
+        if (IsDirty || IsEditing || value == current)
             return;
         original = value = current;
         Changed();
@@ -135,6 +159,8 @@ public sealed class EditableField : ObservableObject
 
     public void Revert()
     {
+        SetSecondaryHack(null);
+        SetLearningHack(null);
         original = value = latest;
         Error = null;
         Changed();
@@ -142,6 +168,8 @@ public sealed class EditableField : ObservableObject
 
     public void Accept()
     {
+        SetSecondaryHack(null);
+        SetLearningHack(null);
         original = latest = value;
         Error = null;
         Changed();
@@ -158,7 +186,7 @@ public sealed class EditableField : ObservableObject
             Value = maximum;
     }
 
-    public MemoryEdit ToEdit() => new(Offset, Width, original, value, SkillIdentity, BattleIdentity);
+    public MemoryEdit ToEdit() => new(Offset, Width, original, value, SkillIdentity, BattleIdentity, SecondaryHack, LearningHack);
 }
 
 public sealed class JobViewModel : ObservableObject
@@ -348,6 +376,28 @@ public sealed class SkillSlotViewModel : ObservableObject
     private bool supported;
     private readonly string nameKey;
     private UnitSkillRules? rules;
+    private bool secondaryHackEnabled;
+    internal long Generation { get; set; }
+    public bool IsSecondary => Slot == SkillSlot.Secondary;
+    public bool SecondaryHackEnabled
+    {
+        get => secondaryHackEnabled;
+        set
+        {
+            value = value && IsSecondary && CanChange;
+            if (secondaryHackEnabled == value)
+                return;
+            secondaryHackEnabled = value;
+            Field.SetSecondaryHack(null);
+            BuildCandidates();
+            Notify();
+        }
+    }
+    public void ResetSecondaryHack()
+    {
+        SecondaryHackEnabled = false;
+        Field.SetSecondaryHack(null);
+    }
     public SkillSlot Slot { get; }
     public string Name => Localizer.T(nameKey);
     public EditableField Field { get; }
@@ -365,7 +415,8 @@ public sealed class SkillSlotViewModel : ObservableObject
         this.nameKey = nameKey;
         Field = field;
         this.text = text;
-        Field.ChangeDescription = () => $"{Field.Label} {Describe(Field.Original)} → {Describe(Field.Value)}";
+        Field.ChangeDescription = () => $"{Field.Label} {Describe(Field.Original)} → {Describe(Field.Value)}"
+            + (Field.SecondaryHack != null ? " · " + Localizer.T("core.skill.hackWarning") : "");
         Field.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(EditableField.Value))
@@ -378,7 +429,10 @@ public sealed class SkillSlotViewModel : ObservableObject
 
     public void Refresh(UnitSkillRules? rules, byte[] data)
     {
-        identity = SkillIdentity.Read(data);
+        var nextIdentity = SkillIdentity.Read(data);
+        if (identity != nextIdentity || rules is not { Supported: true })
+            ResetSecondaryHack();
+        identity = nextIdentity;
         if (!Field.IsDirty)
             Field.SkillIdentity = identity;
         current = (uint)Values.Bits(data.AsSpan(UnitSkillRules.Offset(Slot)),
@@ -393,7 +447,7 @@ public sealed class SkillSlotViewModel : ObservableObject
 
     private void BuildCandidates()
     {
-        Candidates = supported ? rules!.Candidates(Slot)
+        Candidates = supported ? (SecondaryHackEnabled ? rules!.HackSecondary : rules!.Candidates(Slot))
             .Where(id => id == 0 || Slot == SkillSlot.Secondary || text.HasAbility(id))
             .Select(id => new SkillCandidate(id, Describe((uint)id))).ToArray() : [];
         Notify(nameof(Candidates));
@@ -411,11 +465,17 @@ public sealed class SkillSlotViewModel : ObservableObject
     {
         if (!CanChange || Candidates.All(candidate => candidate.Id != id))
             return false;
+        Field.SetSecondaryHack(SecondaryHackEnabled && identity != null
+            ? new SecondarySkillAuthorization(Field.Offset, identity, (uint)id, Generation) : null);
         Field.Value = (uint)id;
         return true;
     }
 
-    public bool ValidPending => !Field.IsDirty || CanChange && Candidates.Any(candidate => candidate.Id == Field.Value);
+    public bool ValidPending => !Field.IsDirty || CanChange
+        && (Field.SecondaryHack is { } hack
+            ? SecondaryHackEnabled && hack.Allows(Field.ToEdit()) && rules!.HackSecondary.Contains((int)Field.Value)
+            : rules!.Candidates(Slot).Contains((int)Field.Value))
+        && Candidates.Any(candidate => candidate.Id == Field.Value);
 }
 
 public sealed class UnitViewModel : ObservableObject
@@ -425,6 +485,12 @@ public sealed class UnitViewModel : ObservableObject
     private FftLayout? lastLayout;
     public string PrimarySkill { get; private set; } = "—";
     public IReadOnlyList<SkillSlotViewModel> SkillSlots { get; }
+    public SkillLearningViewModel Learning { get; }
+    public void ResetSkillHacks()
+    {
+        foreach (var slot in SkillSlots) slot.ResetSecondaryHack();
+        Learning.Reset();
+    }
     public UnitStatRules? StatRules { get; private set; }
     public IReadOnlyList<StatViewModel> Stats { get; }
     public IEnumerable<StatViewModel> DisplayStats => new[] { Stats[0], Stats[1], Stats[3], Stats[4], Stats[2] };
@@ -450,9 +516,11 @@ public sealed class UnitViewModel : ObservableObject
     public IReadOnlyList<EquipmentViewModel> Equipment { get; private set; } = [];
     public IEnumerable<EditableField> Fields => new[] { Level, Experience, Brave, Faith }
         .Concat(SkillSlots.Select(slot => slot.Field))
+        .Concat(Learning.Fields)
         .Concat(Stats.Select(stat => stat.Raw))
         .Concat(Jobs.SelectMany(job => new[] { job.Jp, job.Total, job.LevelByte }).Distinct());
     public bool IsDirty => Fields.Any(item => item.IsDirty);
+    internal void RefreshDirty() => Notify(nameof(IsDirty));
     public RelayCommand AddAll500 { get; }
     public RelayCommand AllLevel8 { get; }
 
@@ -476,6 +544,7 @@ public sealed class UnitViewModel : ObservableObject
         SkillSlots = Enum.GetValues<SkillSlot>().Select(slot => new SkillSlotViewModel(slot, slotNames[(int)slot],
             Field(Loc(slotNames[(int)slot]), "Skill", UnitSkillRules.Offset(slot), slot == SkillSlot.Secondary ? 1 : 2,
                 0, slot == SkillSlot.Secondary ? 255u : 65535u), this.text)).ToArray();
+        Learning = new SkillLearningViewModel(this, this.text);
         string[] statNames = ["core.stat.maxHp", "core.stat.maxMp", "core.stat.speed", "core.stat.pa", "core.stat.ma"];
         Stats = statNames.Select((name, i) => new StatViewModel(this, i, name,
             Field(Loc(name), "RawStat", FftLayout.RawStats + i * 3, 3, 0, UnitStats.RawMaximum))).ToArray();
@@ -614,6 +683,7 @@ public sealed class UnitViewModel : ObservableObject
         Notify(nameof(PrimarySkill));
         foreach (var slot in SkillSlots)
             slot.Refresh(snapshot.Skills, snapshot.Data);
+        Learning.Refresh(snapshot.Data, snapshot.Skills?.Learning);
         string[] names = ["head", "body", "accessory", "rightWeapon", "rightShield", "leftWeapon", "leftShield"];
         Equipment = names.Select((name, i) =>
         {
@@ -745,6 +815,32 @@ public sealed class InventoryItemViewModel : ObservableObject
     public bool IsPoaching { get; }
     public string Name => IsPoaching ? text.PoachingName(Id) : text.ItemName(Id);
     public string Category => IsPoaching ? Localizer.T("core.item.group.poaching") : text.ItemCategory(Id);
+    public string Description => IsPoaching ? "" : text.ItemDescription(Id);
+    private bool IsEquipment => !IsPoaching && GroupKey is "equipment" or "bonus";
+    private EquipmentStats? Stats => IsEquipment ? text.ItemStats(Id) : null;
+    public string StatSummary => !IsEquipment ? "" : Stats?.Summary ?? Localizer.T("core.item.stats.unknown");
+    public bool HasDetails => Description.Length > 0 || IsEquipment;
+    public string DetailsText
+    {
+        get
+        {
+            if (IsPoaching)
+                return Name;
+            var parts = new List<string> { Name };
+            if (Description.Length > 0)
+                parts.Add(Description);
+            if (IsEquipment)
+            {
+                var summary = StatSummary;
+                if (summary.Length > 0)
+                    parts.Add(summary);
+                if (Stats != null)
+                    parts.Add(Localizer.T("core.item.stats.source"));
+                parts.Add(Localizer.T("core.item.stats.limitations"));
+            }
+            return string.Join("\n\n", parts);
+        }
+    }
     // 筛选用和语言无关的代码（consumable / equipment / bonus / poaching），显示用 Group
     public string GroupKey => IsPoaching ? "poaching" : text.ItemGroupKey(Id);
     public string Group => Localizer.T("core.item.group." + GroupKey);
@@ -776,6 +872,13 @@ public sealed class TrainerViewModel : ObservableObject
     private readonly SaveBackups? backups;
     private readonly FftLayout layout;
     private long generation;
+    private readonly Dictionary<(int Id, bool Poaching), InventoryItemViewModel> itemsById = [];
+    private int refreshDepth;
+    private bool itemsRefreshRequested;
+    private bool pendingRefreshRequested;
+    private bool lastHasChanges;
+    private bool lastHasJpChanges;
+    private bool lastNeedsConfirmation;
     private long optionsVersion;
     private readonly GameTextService? gameText;
     private UnitViewModel? selectedUnit;
@@ -1037,7 +1140,14 @@ public sealed class TrainerViewModel : ObservableObject
     public UnitViewModel? SelectedUnit
     {
         get => selectedUnit;
-        set { selectedUnit = value; Notify(); }
+        set
+        {
+            if (selectedUnit != value)
+                foreach (var unit in Units)
+                    unit.ResetSkillHacks();
+            selectedUnit = value;
+            Notify();
+        }
     }
     public int Tab
     {
@@ -1078,19 +1188,20 @@ public sealed class TrainerViewModel : ObservableObject
         ShowEquipment = new RelayCommand(() => ItemCategory = "equipment");
         ShowBonusItems = new RelayCommand(() => ItemCategory = "bonus");
         ShowPoaching = new RelayCommand(() => ItemCategory = "poaching");
-        MaxVisibleItems = new RelayCommand(() =>
+        MaxVisibleItems = new RelayCommand(() => BatchRefresh(() =>
         {
             foreach (var item in VisibleItems.ToArray())
                 item.Quantity.Value = 99;
-        }, () => CanEdit);
+        }), () => CanEdit);
         Watch(Gil);
-        Undo = new RelayCommand(() =>
+        Undo = new RelayCommand(() => BatchRefresh(() =>
         {
             foreach (var field in Fields)
                 field.Revert();
+            foreach (var unit in Units) unit.Learning.Reset();
             Status = Localizer.T("core.status.reverted");
             Notify(nameof(Status));
-        }, () => !busy && HasChanges);
+        }), () => !busy && HasChanges);
         if (preferencesPath != null && BattlePreferences.Load(preferencesPath) is { Keep: true } saved)
         {
             savedPreferences = saved;
@@ -1102,8 +1213,37 @@ public sealed class TrainerViewModel : ObservableObject
         }
     }
 
+    // Snapshot/Max/Undo update many fields synchronously. Keep stable row identities and
+    // reconcile each dependent collection only once, including on an exceptional exit.
+    private void BatchRefresh(Action action)
+    {
+        refreshDepth++;
+        try { action(); }
+        finally
+        {
+            if (--refreshDepth == 0)
+            {
+                if (itemsRefreshRequested)
+                {
+                    itemsRefreshRequested = false;
+                    RefreshItems();
+                }
+                if (pendingRefreshRequested)
+                {
+                    pendingRefreshRequested = false;
+                    RefreshPending();
+                }
+            }
+        }
+    }
+
     private void RefreshItems()
     {
+        if (refreshDepth > 0)
+        {
+            itemsRefreshRequested = true;
+            return;
+        }
         var matches = Items.Where(item => (ShowAllItems || item.Quantity.Value > 0)
             && (ItemCategory == "all" || item.GroupKey == ItemCategory)
             && (item.Name.Contains(ItemSearch, StringComparison.OrdinalIgnoreCase)
@@ -1119,6 +1259,11 @@ public sealed class TrainerViewModel : ObservableObject
     {
         field.PropertyChanged += (_, e) =>
         {
+            if (e.PropertyName is nameof(EditableField.SecondaryHack) or nameof(EditableField.LearningHack))
+            {
+                RefreshPending();
+                return;
+            }
             if (e.PropertyName != nameof(EditableField.IsDirty))
                 return;
             RefreshPending();
@@ -1127,7 +1272,6 @@ public sealed class TrainerViewModel : ObservableObject
                 Status = Localizer.T("core.status.staged");
                 Notify(nameof(Status));
             }
-            Undo.Refresh();
         };
     }
 
@@ -1151,24 +1295,47 @@ public sealed class TrainerViewModel : ObservableObject
             unit.RefreshLanguage();
         foreach (var field in Pending)
             field.RefreshText();
+        RefreshItems(); // Names can change while a search is active.
         Notify(string.Empty);
     }
 
     private void RefreshPending()
     {
+        if (refreshDepth > 0)
+        {
+            pendingRefreshRequested = true;
+            return;
+        }
         var pending = Fields.Where(field => field.IsDirty && field.Key is not ("Jp" or "TotalJp" or "JobLevels"))
             .Concat(Units.SelectMany(unit => unit.Jobs).Where(job => job.IsDirty).Select(job => job.Jp)).ToArray();
-        foreach (var field in Pending.Except(pending).ToArray())
+        var pendingSet = pending.ToHashSet();
+        foreach (var field in Pending.Where(field => !pendingSet.Contains(field)).ToArray())
             Pending.Remove(field);
+        var existing = Pending.ToHashSet();
         foreach (var field in pending)
-            if (!Pending.Contains(field))
+            if (!existing.Contains(field))
                 Pending.Add(field);
-        Notify(nameof(HasChanges));
-        Notify(nameof(HasJpChanges));
-        Notify(nameof(NeedsConfirmation));
+        if (lastHasChanges != HasChanges)
+        {
+            lastHasChanges = HasChanges;
+            Notify(nameof(HasChanges));
+        }
+        if (lastHasJpChanges != HasJpChanges)
+        {
+            lastHasJpChanges = HasJpChanges;
+            Notify(nameof(HasJpChanges));
+        }
+        if (lastNeedsConfirmation != NeedsConfirmation)
+        {
+            lastNeedsConfirmation = NeedsConfirmation;
+            Notify(nameof(NeedsConfirmation));
+        }
+        Undo.Refresh();
     }
 
-    public void ApplySnapshot(GameSnapshot? snapshot)
+    public void ApplySnapshot(GameSnapshot? snapshot) => BatchRefresh(() => ApplySnapshotCore(snapshot));
+
+    private void ApplySnapshotCore(GameSnapshot? snapshot)
     {
         if (busy)
             return;
@@ -1182,12 +1349,16 @@ public sealed class TrainerViewModel : ObservableObject
         Notify(nameof(ConnectionText));
         MaxVisibleItems.Refresh();
         RefreshBattle(snapshot);
+        if (snapshot == null || generation != snapshot.Generation)
+            foreach (var unit in Units)
+                unit.ResetSkillHacks();
         if (snapshot == null)
             return;
         if (generation != snapshot.Generation)
         {
             Units.Clear();
             Items.Clear();
+            itemsById.Clear();
             VisibleItems.Clear();
             Pending.Clear();
             Gil.IsEditing = false;
@@ -1203,8 +1374,7 @@ public sealed class TrainerViewModel : ObservableObject
             var count = Math.Min(quantities.Length, poaching ? FftLayout.PoachingCount : FftLayout.InventoryCount);
             for (var id = 0; id < count; id++)
             {
-                var item = Items.FirstOrDefault(item => item.Id == id && item.IsPoaching == poaching);
-                if (item != null)
+                if (itemsById.TryGetValue((id, poaching), out var item))
                 {
                     item.Quantity.Refresh(quantities[id]);
                     continue;
@@ -1216,14 +1386,16 @@ public sealed class TrainerViewModel : ObservableObject
                     if (e.PropertyName == nameof(EditableField.Value))
                         RefreshItems();
                 };
+                itemsById.Add((id, poaching), item);
                 Items.Add(item);
+                RefreshItems();
             }
         }
         RefreshQuantities(snapshot.Inventory, false);
         RefreshQuantities(snapshot.Poaching ?? [], true);
-        RefreshItems();
         foreach (var removed in Units.Where(unit => snapshot.Units.All(item => item.Slot != unit.Slot)).ToArray())
         {
+            removed.ResetSkillHacks();
             foreach (var field in removed.Fields)
                 Pending.Remove(field);
             Units.Remove(removed);
@@ -1234,6 +1406,8 @@ public sealed class TrainerViewModel : ObservableObject
             if (unit == null)
             {
                 unit = new UnitViewModel(item, layout, text);
+                foreach (var slot in unit.SkillSlots)
+                    slot.Generation = generation;
                 foreach (var field in unit.Fields)
                     Watch(field);
                 Units.Add(unit);
@@ -1243,7 +1417,6 @@ public sealed class TrainerViewModel : ObservableObject
         }
         if (SelectedUnit == null || !Units.Contains(SelectedUnit))
             SelectedUnit = Units.FirstOrDefault();
-        Notify(nameof(HasChanges));
         RefreshPending();
         Notify(nameof(RosterCountText));
         Undo.Refresh();
@@ -1251,13 +1424,34 @@ public sealed class TrainerViewModel : ObservableObject
             RefreshText();
     }
 
-    public async Task WriteAsync(bool dangerConfirmed = false)
+    public bool StageLearning(UnitViewModel unit)
     {
+        if (!CanEdit || SelectedUnit != unit || !Units.Contains(unit) || !unit.Learning.Stage(generation)) return false;
+        foreach (var field in unit.Learning.Fields)
+        {
+            Watch(field);
+            field.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(EditableField.IsDirty)) unit.RefreshDirty(); };
+        }
+        unit.RefreshDirty();
+        RefreshPending();
+        return true;
+    }
+
+    public async Task WriteAsync(bool dangerConfirmed = false, IReadOnlyList<MemoryEdit>? confirmedEdits = null)
+    {
+        if (confirmedEdits != null && !confirmedEdits.SequenceEqual(Pending.Select(field => field.ToEdit())))
+            return;
         if (!CanEdit || !HasChanges || NeedsConfirmation && !dangerConfirmed)
             return;
         if (Units.Any(unit => unit.StatRules == null && unit.Stats.Any(stat => stat.Raw.IsDirty)))
         {
             Status = Localizer.T("core.status.statTableFailed");
+            Notify(nameof(Status));
+            return;
+        }
+        if (Units.Any(unit => !unit.Learning.ValidPending))
+        {
+            Status = Localizer.T("core.learn.invalid");
             Notify(nameof(Status));
             return;
         }

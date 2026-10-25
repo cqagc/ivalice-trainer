@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets\app.ico" />
+    <InternalsVisibleTo Include="FftTrainer.Inventory.Harness" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../FftTrainer.Core/FftTrainer.Core.csproj" />

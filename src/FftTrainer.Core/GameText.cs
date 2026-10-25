@@ -5,7 +5,7 @@ using Microsoft.Win32;
 
 namespace FftTrainer.Core;
 
-// 一种语言的游戏文本（只留修改器用得到的名称），可以序列化成缓存文件
+// 一种语言的游戏文本（修改器用到的名称与道具说明），可以序列化成缓存文件
 public sealed record GameTextData(
     Dictionary<int, string> Units,
     Dictionary<int, string> Jobs,
@@ -14,6 +14,10 @@ public sealed record GameTextData(
     Dictionary<int, string> ItemCategories,
     Dictionary<int, string> Abilities)
 {
+    // Optional for source compatibility with existing six-argument constructors.
+    [System.Text.Json.Serialization.JsonRequired]
+    public Dictionary<int, string> ItemDescriptions { get; init; } = [];
+
     // 本地化 Nex 表名（layout 在程序目录 Nex/Layouts/ffto/ 下）；字段对应见 docs/text-research.md
     public static IReadOnlyList<string> Tables { get; } = ["job", "jobcommand", "item", "uiitemcategory", "ability", "charaname"];
 
@@ -24,6 +28,18 @@ public sealed record GameTextData(
             return text?.Trim();
         text = Regex.Replace(text, "<scale=[^>]*>(.*?)<scale>", match => match.Groups[1].Value.ToLowerInvariant());
         return Regex.Replace(text, "<[^>]*>", "").Trim();
+    }
+
+    // Descriptions retain case, line breaks and literal angle-bracket text. Only
+    // recognized presentation tags are removed; do not apply the name small-caps rule.
+    public static string CleanDescription(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return "";
+        text = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        text = Regex.Replace(text, @"<br\s*/?>", "\n", RegexOptions.IgnoreCase);
+        return Regex.Replace(text,
+            @"</?(?:scale|color|font|size|b|i|u)(?:=[^<>\r\n]*)?\s*>", "", RegexOptions.IgnoreCase).Trim();
     }
 
     public static GameTextData FromTables(IReadOnlyDictionary<string, IReadOnlyList<GameTableRow>> tables)
@@ -51,25 +67,30 @@ public sealed record GameTextData(
         var categoryNames = Names(Rows("uiitemcategory"));
         var items = new Dictionary<int, string>();
         var categories = new Dictionary<int, string>();
+        var descriptions = new Dictionary<int, string>();
         foreach (var row in Rows("item"))
         {
+            if (CleanDescription(row.Text("Description")) is { Length: > 0 } description)
+                descriptions[row.Key] = description;
             if (Name(row) is not { } name)
                 continue;
             items[row.Key] = name;
             if (row.Number("UiItemCategoryId") is { } category && categoryNames.TryGetValue(category, out var categoryName))
                 categories[row.Key] = categoryName;
         }
-        return new GameTextData(Names(Rows("charaname")), jobs, commands, items, categories, Names(Rows("ability")));
+        return new GameTextData(Names(Rows("charaname")), jobs, commands, items, categories, Names(Rows("ability")))
+        { ItemDescriptions = descriptions };
     }
 }
 
 // 找游戏目录、按界面语言读游戏文本并换入 GameTextCatalog。
-// 读出的结果缓存在 %LOCALAPPDATA%\FftTrainer\gametext\<exe 大小-修改时间>\<语言>.json，游戏更新后自动作废。
+// 缓存键包含 schema 版本、安装路径、EXE 大小与修改时间；游戏更新或换目录后自动作废。
 // 任何失败（目录找不到、封包或表结构变了、DirectStorage dll 缺失）都只记 session.log，目录清空后走编号兜底，不抛异常。
 public sealed class GameTextService
 {
     public const string SteamAppId = "1004640";
-    private const int CacheVersion = 2;
+    private const int CacheVersion = 3;
+    private readonly EquipmentStatsReader equipment = new();
     private readonly GameTextCatalog catalog;
     private readonly string cacheDirectory;
     private readonly Func<string, string, GameTextData> reader;
@@ -94,9 +115,12 @@ public sealed class GameTextService
     {
         if (root != null && !File.Exists(Path.Combine(root, GameFileReader.ExecutableName)))
             root = null;
-        if (root == null || string.Equals(root, GameRoot, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(root, GameRoot, StringComparison.OrdinalIgnoreCase))
             return false;
         GameRoot = root;
+        loadedKey = null;
+        catalog.Load(null);
+        catalog.LoadEquipment(null);
         return true;
     }
 
@@ -106,7 +130,10 @@ public sealed class GameTextService
 
     public void Load(UiLanguage language)
     {
-        var key = GameRoot == null ? null : GameRoot + "|" + language.GameCode;
+        // Separate failure domains: missing text packs must not hide verified EXE
+        // stats, and an unsupported EXE must not prevent official names/descriptions.
+        catalog.LoadEquipment(equipment.Load(GameRoot));
+        var key = GameRoot == null ? null : GameRoot + "|" + equipment.FileIdentity + "|" + language.GameCode;
         if (key != null && key == loadedKey)
             return;
         loadedKey = key;
@@ -132,10 +159,12 @@ public sealed class GameTextService
         try
         {
             var exe = new FileInfo(Path.Combine(root, GameFileReader.ExecutableName));
-            path = Path.Combine(cacheDirectory, $"v{CacheVersion}-{exe.Length:x}-{exe.LastWriteTimeUtc.Ticks:x}", language + ".json");
+            var rootKey = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(root).ToUpperInvariant())))[..16];
+            path = Path.Combine(cacheDirectory, $"v{CacheVersion}-{rootKey}-{exe.Length:x}-{exe.LastWriteTimeUtc.Ticks:x}", language + ".json");
             if (File.Exists(path) && JsonSerializer.Deserialize<GameTextData>(File.ReadAllText(path)) is { } cached
                 && cached.Jobs != null && cached.Items != null && cached.Units != null && cached.Abilities != null
-                && cached.Commands != null && cached.ItemCategories != null)
+                && cached.Commands != null && cached.ItemCategories != null && cached.ItemDescriptions != null)
                 return cached;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)

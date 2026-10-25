@@ -83,6 +83,37 @@ public sealed partial class TrainerTests
         }
 
         [Fact]
+        public void ActiveInventorySearchIsReevaluatedWhenNamesChangeLanguage()
+        {
+            var text = new GameTextCatalog();
+            text.Parse("items", """[{"id":1,"name":"测试剑","equipmentGroup":"武器"}]""");
+            var model = new TrainerViewModel(new TestMemory(), text: text);
+            model.ApplySnapshot(InventorySnapshot());
+            model.ItemSearch = "测试剑";
+            var row = Assert.Single(model.VisibleItems);
+            row.Quantity.Value = 42;
+            try
+            {
+                Localizer.Instance.SetLanguage(UiLanguages.English);
+                // GameTextService replaces the catalog on language switches; simulate
+                // its official-name reload without requiring installed game archives.
+                text.Parse("items", """[{"id":1,"name":"Test sword","equipmentGroup":"武器"}]""");
+                model.RefreshLanguage();
+                Assert.Empty(model.VisibleItems);
+                Assert.Same(row.Quantity, Assert.Single(model.Pending));
+                model.ItemSearch = "test SWORD";
+                Assert.Same(row, Assert.Single(model.VisibleItems));
+                model.ItemSearch = row.HexId;
+                Assert.Contains(row, model.VisibleItems);
+                Assert.Equal(42u, row.Quantity.Value);
+            }
+            finally
+            {
+                Localizer.Instance.SetLanguage(UiLanguages.Source);
+            }
+        }
+
+        [Fact]
         public void ErrorsAndNoticesUseTheCurrentLanguage()
         {
             try

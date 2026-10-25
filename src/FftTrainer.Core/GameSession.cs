@@ -6,7 +6,27 @@ public sealed record UnitSnapshot(int Slot, byte[] Data, UnitStatRules? Stats = 
 public sealed record GameSnapshot(long Generation, uint Gil, IReadOnlyList<UnitSnapshot> Units, byte[] Inventory,
     IReadOnlyList<BattleUnit>? Battle = null, bool LockHp = false, bool InfiniteMp = false, string? BattleNotice = null, bool GuestLockHp = false, bool FreezeCountdown = false, bool LockCt = false, int ExperienceMultiplier = 1, int JpMultiplier = 1, byte[]? Poaching = null, bool AlwaysMove = false, bool AlwaysAct = false, bool MaxMoveJump = false, bool InstantCast = false, long OptionsVersion = 0, string? ModulePath = null);
 public sealed record MemoryEdit(ulong Offset, int Width, uint Before, uint After, SkillIdentity? SkillIdentity = null,
-    BattleIdentity? BattleIdentity = null);
+    BattleIdentity? BattleIdentity = null, SecondarySkillAuthorization? SecondaryHack = null,
+    SkillLearningAuthorization? LearningHack = null);
+
+// A revocable, single-selection capability, never persisted. Locking the capability
+// serializes revocation with validation and the three mirror writes.
+public sealed class SecondarySkillAuthorization
+{
+    private readonly ulong offset;
+    private readonly SkillIdentity identity;
+    private readonly uint target;
+    private bool active = true;
+
+    internal long Generation { get; }
+    internal SecondarySkillAuthorization(ulong offset, SkillIdentity identity, uint target, long generation)
+        => (this.offset, this.identity, this.target, Generation) = (offset, identity, target, generation);
+
+    internal void Revoke() { lock (this) active = false; }
+    internal bool Allows(MemoryEdit edit) => active && edit.Offset == offset
+        && edit.Width == 1 && edit.SkillIdentity == identity && edit.After == target;
+}
+
 public sealed record WriteResult(MemoryEdit Edit, string? Error, string? Warning = null);
 
 public interface IGameSession
@@ -301,7 +321,7 @@ public sealed class GameSession : IGameSession, IBattleSession, IDisposable
                         return Failed(Localizer.T("core.error.versionUnverified"));
                 }
                 refreshRequested = true;
-                var results = ApplyEdits(process, process.WriteBytes, process.ModuleBase, edits, layout);
+                var results = ApplyEdits(process, process.WriteBytes, process.ModuleBase, edits, layout, expectedGeneration);
                 if (results.Any(result => result.Error != null))
                     rewards.Reset(Localizer.T("core.rewards.writeFailedReset"));
                 return results;
@@ -316,132 +336,147 @@ public sealed class GameSession : IGameSession, IBattleSession, IDisposable
 
     // Each field is verified independently; battle writes never target roster mirrors.
     public static IReadOnlyList<WriteResult> ApplyEdits(IMemorySource source,
-        Action<ulong, byte[]> write, ulong moduleBase, IReadOnlyList<MemoryEdit> edits, FftLayout? layout = null)
+        Action<ulong, byte[]> write, ulong moduleBase, IReadOnlyList<MemoryEdit> edits, FftLayout? layout = null,
+        long? generation = null)
     {
         layout ??= new FftLayout();
         var results = new List<WriteResult>();
-        foreach (var edit in edits)
+        results.AddRange(SkillLearningWrites.Apply(source, write, moduleBase, edits, layout, generation));
+        foreach (var edit in edits.Where(edit => edit.LearningHack == null))
         {
-            string? warning = null;
-            try
+            lock (edit.SecondaryHack ?? new object())
             {
-                // Inventory and poaching edits are single-byte quantities; reject gaps before any read.
-                var end = checked(edit.Offset + (ulong)edit.Width);
-                if (edit.Offset < FftLayout.Roster && end >= FftLayout.Poaching)
+                string? warning = null;
+                try
                 {
-                    var inventory = edit.Offset >= FftLayout.Inventory && edit.Offset <= FftLayout.InventoryLast;
-                    var poaching = edit.Offset >= FftLayout.Poaching
-                        && edit.Offset < FftLayout.Poaching + FftLayout.PoachingCount;
-                    if ((!inventory && !poaching) || edit.Width != 1 || edit.After > 99)
-                        throw new IOException(Localizer.T("core.error.inventoryRange"));
-                }
-                var isBattle = edit.Offset >= BattleUnit.Start
-                    && edit.Offset < BattleUnit.Start + BattleUnit.Count * BattleUnit.Stride;
-                if (isBattle)
-                    BattleRules.Validate(source, moduleBase, edit);
-                else if (edit.BattleIdentity != null)
-                    throw new IOException(Localizer.T("core.error.battleAddress"));
-                var address = checked(moduleBase + edit.Offset);
-                var type = edit.Width switch
-                {
-                    1 => ValueTypeCode.U8,
-                    2 => ValueTypeCode.U16,
-                    3 => ValueTypeCode.U24,
-                    4 => ValueTypeCode.U32,
-                    _ => throw new ArgumentOutOfRangeException(nameof(edits))
-                };
-                if (edit.Width == 3 && (edit.After > UnitStats.RawMaximum
-                    || edit.Offset < FftLayout.Roster
-                    || edit.Offset - FftLayout.Roster >= (ulong)layout.RosterCount * (ulong)layout.RosterStride
-                    || (edit.Offset - FftLayout.Roster) % (ulong)layout.RosterStride is var rawOffset
-                        && (rawOffset < FftLayout.RawStats || rawOffset > FftLayout.RawStats + 12
-                            || (rawOffset - FftLayout.RawStats) % 3 != 0)))
-                    throw new IOException(Localizer.T("core.error.rawStatRange"));
-                if (Values.Bits(source.ReadBytes(address, edit.Width), type) != edit.Before)
-                    throw new IOException(Localizer.T("core.error.valueChanged"));
-                var addresses = new List<ulong> { address };
-                if (edit.Offset >= FftLayout.Roster
-                    && edit.Offset - FftLayout.Roster < (ulong)layout.RosterCount * (ulong)layout.RosterStride)
-                {
-                    var relative = edit.Offset - FftLayout.Roster;
-                    var fieldOffset = relative % (ulong)layout.RosterStride;
-                    SkillSlot? skillSlot = fieldOffset switch
+                    if (SkillLearningWrites.TouchesLearned(edit, layout))
+                        throw new IOException(Localizer.T("core.learn.invalid"));
+                    if (edit.SecondaryHack is { } hack && (!hack.Allows(edit) || hack.Generation != generation
+                        || edit.Offset < FftLayout.Roster
+                        || edit.Offset - FftLayout.Roster >= (ulong)layout.RosterCount * (ulong)layout.RosterStride
+                        || (edit.Offset - FftLayout.Roster) % (ulong)layout.RosterStride != FftLayout.SecondarySkill))
+                        throw new IOException(Localizer.T("core.error.secondaryHack"));
+                    // Inventory and poaching edits are single-byte quantities; reject gaps before any read.
+                    var end = checked(edit.Offset + (ulong)edit.Width);
+                    if (edit.Offset < FftLayout.Roster && end >= FftLayout.Poaching)
                     {
-                        FftLayout.SecondarySkill => SkillSlot.Secondary,
-                        FftLayout.ReactionSkill => SkillSlot.Reaction,
-                        FftLayout.SupportSkill => SkillSlot.Support,
-                        FftLayout.MovementSkill => SkillSlot.Movement,
-                        _ => null
+                        var inventory = edit.Offset >= FftLayout.Inventory && edit.Offset <= FftLayout.InventoryLast;
+                        var poaching = edit.Offset >= FftLayout.Poaching
+                            && edit.Offset < FftLayout.Poaching + FftLayout.PoachingCount;
+                        if ((!inventory && !poaching) || edit.Width != 1 || edit.After > 99)
+                            throw new IOException(Localizer.T("core.error.inventoryRange"));
+                    }
+                    var isBattle = edit.Offset >= BattleUnit.Start
+                        && edit.Offset < BattleUnit.Start + BattleUnit.Count * BattleUnit.Stride;
+                    if (isBattle)
+                        BattleRules.Validate(source, moduleBase, edit);
+                    else if (edit.BattleIdentity != null)
+                        throw new IOException(Localizer.T("core.error.battleAddress"));
+                    var address = checked(moduleBase + edit.Offset);
+                    var type = edit.Width switch
+                    {
+                        1 => ValueTypeCode.U8,
+                        2 => ValueTypeCode.U16,
+                        3 => ValueTypeCode.U24,
+                        4 => ValueTypeCode.U32,
+                        _ => throw new ArgumentOutOfRangeException(nameof(edits))
                     };
-                    var isSkill = fieldOffset >= FftLayout.SecondarySkill && fieldOffset < FftLayout.Equipment;
-                    if (isSkill)
+                    if (edit.Width == 3 && (edit.After > UnitStats.RawMaximum
+                        || edit.Offset < FftLayout.Roster
+                        || edit.Offset - FftLayout.Roster >= (ulong)layout.RosterCount * (ulong)layout.RosterStride
+                        || (edit.Offset - FftLayout.Roster) % (ulong)layout.RosterStride is var rawOffset
+                            && (rawOffset < FftLayout.RawStats || rawOffset > FftLayout.RawStats + 12
+                                || (rawOffset - FftLayout.RawStats) % 3 != 0)))
+                        throw new IOException(Localizer.T("core.error.rawStatRange"));
+                    if (Values.Bits(source.ReadBytes(address, edit.Width), type) != edit.Before)
+                        throw new IOException(Localizer.T("core.error.valueChanged"));
+                    var addresses = new List<ulong> { address };
+                    if (edit.Offset >= FftLayout.Roster
+                        && edit.Offset - FftLayout.Roster < (ulong)layout.RosterCount * (ulong)layout.RosterStride)
                     {
-                        if (skillSlot == null || edit.Width != (skillSlot == SkillSlot.Secondary ? 1 : 2)
-                            || !UnitSkillRules.Matches(skillSlot.Value, (int)edit.Before)
-                            || !UnitSkillRules.Matches(skillSlot.Value, (int)edit.After))
-                            throw new IOException(Localizer.T("core.error.skillSlotInvalid"));
-                        var unit = source.ReadBytes(moduleBase + FftLayout.Roster + relative - fieldOffset, FftLayout.UnitSize);
-                        if (edit.SkillIdentity == null || SkillIdentity.Read(unit) != edit.SkillIdentity)
-                            throw new IOException(Localizer.T("core.error.unitChanged"));
-                        var rules = SkillTables.TryLoad(source, moduleBase)?.ReadUnit(unit);
-                        if (rules is not { Supported: true } || !rules.Candidates(skillSlot.Value).Contains((int)edit.After))
-                            throw new IOException(Localizer.T("core.error.skillUnavailable"));
-                    }
-                    var isRosterField = isSkill || edit.Width == 1
-                        && (fieldOffset is FftLayout.Level or FftLayout.Experience or FftLayout.Brave or FftLayout.Faith
-                            || fieldOffset >= FftLayout.JobLevels && fieldOffset <= FftLayout.JobLevels + 10)
-                        || edit.Width == 2
-                        && (fieldOffset >= FftLayout.CurrentJp
-                            && fieldOffset < FftLayout.CurrentJp + FftLayout.JobCount * 2
-                            && (fieldOffset - FftLayout.CurrentJp) % 2 == 0
-                            || fieldOffset >= FftLayout.TotalJp
-                            && fieldOffset < FftLayout.TotalJp + FftLayout.JobCount * 2
-                            && (fieldOffset - FftLayout.TotalJp) % 2 == 0)
-                        || edit.Width == 3 && fieldOffset >= FftLayout.RawStats
-                            && fieldOffset <= FftLayout.RawStats + 12
-                            && (fieldOffset - FftLayout.RawStats) % 3 == 0;
-                    if (isRosterField)
-                    {
-                        var slotOffset = relative - fieldOffset;
-                        var primary = checked(moduleBase + FftLayout.Roster + slotOffset);
-                        var marker = source.ReadBytes(primary + FftLayout.SlotMarker, 1);
-                        var name = source.ReadBytes(primary + FftLayout.NameId, 2);
-                        foreach (var mirror in FftLayout.RosterMirrors)
+                        var relative = edit.Offset - FftLayout.Roster;
+                        var fieldOffset = relative % (ulong)layout.RosterStride;
+                        SkillSlot? skillSlot = fieldOffset switch
                         {
-                            var start = checked(moduleBase + mirror + slotOffset);
-                            if (!source.ReadBytes(start + FftLayout.SlotMarker, 1).SequenceEqual(marker)
-                                || !source.ReadBytes(start + FftLayout.NameId, 2).SequenceEqual(name))
-                                warning = Localizer.T("core.warning.mirrorMismatch");
-                            if (isSkill && (SkillIdentity.Read(source.ReadBytes(start, FftLayout.UnitSize)) != edit.SkillIdentity
-                                || Values.Bits(source.ReadBytes(start + fieldOffset, edit.Width), type) != edit.Before))
-                                throw new IOException(Localizer.T("core.error.skillMirror"));
-                            addresses.Add(checked(start + fieldOffset));
+                            FftLayout.SecondarySkill => SkillSlot.Secondary,
+                            FftLayout.ReactionSkill => SkillSlot.Reaction,
+                            FftLayout.SupportSkill => SkillSlot.Support,
+                            FftLayout.MovementSkill => SkillSlot.Movement,
+                            _ => null
+                        };
+                        var isSkill = fieldOffset >= FftLayout.SecondarySkill && fieldOffset < FftLayout.Equipment;
+                        if (isSkill)
+                        {
+                            if (skillSlot == null || edit.Width != (skillSlot == SkillSlot.Secondary ? 1 : 2)
+                                || !UnitSkillRules.Matches(skillSlot.Value, (int)edit.Before)
+                                || !UnitSkillRules.Matches(skillSlot.Value, (int)edit.After))
+                                throw new IOException(Localizer.T("core.error.skillSlotInvalid"));
+                            var unit = source.ReadBytes(moduleBase + FftLayout.Roster + relative - fieldOffset, FftLayout.UnitSize);
+                            if (edit.SkillIdentity == null || SkillIdentity.Read(unit) != edit.SkillIdentity)
+                                throw new IOException(Localizer.T("core.error.unitChanged"));
+                            var rules = SkillTables.TryLoad(source, moduleBase)?.ReadUnit(unit);
+                            if (rules is not { Supported: true }
+                                || !(edit.SecondaryHack != null && skillSlot == SkillSlot.Secondary
+                                    ? rules.HackSecondary.Contains((int)edit.After)
+                                    : rules.Candidates(skillSlot.Value).Contains((int)edit.After)))
+                                throw new IOException(Localizer.T("core.error.skillUnavailable"));
                         }
-                        if (warning != null)
-                            addresses.RemoveRange(1, addresses.Count - 1);
+                        var isRosterField = isSkill || edit.Width == 1
+                            && (fieldOffset is FftLayout.Level or FftLayout.Experience or FftLayout.Brave or FftLayout.Faith
+                                || fieldOffset >= FftLayout.JobLevels && fieldOffset <= FftLayout.JobLevels + 10)
+                            || edit.Width == 2
+                            && (fieldOffset >= FftLayout.CurrentJp
+                                && fieldOffset < FftLayout.CurrentJp + FftLayout.JobCount * 2
+                                && (fieldOffset - FftLayout.CurrentJp) % 2 == 0
+                                || fieldOffset >= FftLayout.TotalJp
+                                && fieldOffset < FftLayout.TotalJp + FftLayout.JobCount * 2
+                                && (fieldOffset - FftLayout.TotalJp) % 2 == 0)
+                            || edit.Width == 3 && fieldOffset >= FftLayout.RawStats
+                                && fieldOffset <= FftLayout.RawStats + 12
+                                && (fieldOffset - FftLayout.RawStats) % 3 == 0;
+                        if (isRosterField)
+                        {
+                            var slotOffset = relative - fieldOffset;
+                            var primary = checked(moduleBase + FftLayout.Roster + slotOffset);
+                            var marker = source.ReadBytes(primary + FftLayout.SlotMarker, 1);
+                            var name = source.ReadBytes(primary + FftLayout.NameId, 2);
+                            foreach (var mirror in FftLayout.RosterMirrors)
+                            {
+                                var start = checked(moduleBase + mirror + slotOffset);
+                                if (!source.ReadBytes(start + FftLayout.SlotMarker, 1).SequenceEqual(marker)
+                                    || !source.ReadBytes(start + FftLayout.NameId, 2).SequenceEqual(name))
+                                    warning = Localizer.T("core.warning.mirrorMismatch");
+                                if (isSkill && (SkillIdentity.Read(source.ReadBytes(start, FftLayout.UnitSize)) != edit.SkillIdentity
+                                    || Values.Bits(source.ReadBytes(start + fieldOffset, edit.Width), type) != edit.Before))
+                                    throw new IOException(Localizer.T("core.error.skillMirror"));
+                                addresses.Add(checked(start + fieldOffset));
+                            }
+                            if (warning != null)
+                                addresses.RemoveRange(1, addresses.Count - 1);
+                        }
                     }
+                    var bytes = Values.ToBytes(edit.After, type);
+                    foreach (var target in addresses)
+                        write(target, bytes);
+                    var errors = new List<string>();
+                    foreach (var target in addresses)
+                    {
+                        try
+                        {
+                            if (Values.Bits(source.ReadBytes(target, edit.Width), type) != edit.After)
+                                errors.Add(Localizer.F("core.error.readbackMismatch", target - moduleBase));
+                        }
+                        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
+                        {
+                            errors.Add(Localizer.F("core.error.readbackFailed", target - moduleBase, ex.Message));
+                        }
+                    }
+                    results.Add(new WriteResult(edit, errors.Count == 0 ? null : string.Join("；", errors), warning));
                 }
-                var bytes = Values.ToBytes(edit.After, type);
-                foreach (var target in addresses)
-                    write(target, bytes);
-                var errors = new List<string>();
-                foreach (var target in addresses)
+                catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
                 {
-                    try
-                    {
-                        if (Values.Bits(source.ReadBytes(target, edit.Width), type) != edit.After)
-                            errors.Add(Localizer.F("core.error.readbackMismatch", target - moduleBase));
-                    }
-                    catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
-                    {
-                        errors.Add(Localizer.F("core.error.readbackFailed", target - moduleBase, ex.Message));
-                    }
+                    results.Add(new WriteResult(edit, ex.Message, warning));
                 }
-                results.Add(new WriteResult(edit, errors.Count == 0 ? null : string.Join("；", errors), warning));
-            }
-            catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
-            {
-                results.Add(new WriteResult(edit, ex.Message, warning));
             }
         }
         return results;
@@ -587,11 +622,22 @@ public sealed class SkillTables
 {
     private readonly byte[] jobs;
     private readonly byte[] commands;
+    private readonly int[] verifiedHumanCommands;
+    private readonly string tableFingerprint;
 
     private SkillTables(byte[] jobs, byte[] commands)
     {
         this.jobs = jobs;
         this.commands = commands;
+        tableFingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData([.. jobs, .. commands]));
+        // Ordinary player jobs 0x4A..0x5C map to groups 5..23; Mime has no
+        // actions. Special groups use the independently verified base map.
+        // A live job mapping and valid action are required, not just a name.
+        verifiedHumanCommands = Enumerable.Range(0, 0x5D).Select(job =>
+            (Job: job, Group: job >= 0x4A ? job - 0x4A + 5 : VerifiedBaseGroup(job)))
+            .Where(item => item.Group > 0 && jobs[item.Job * 49] == item.Group
+                && Abilities(item.Group).Take(16).Any(id => id is > 0 and < 0x1A6))
+            .Select(item => item.Group).Prepend(0).Distinct().Order().ToArray();
     }
 
     public static SkillTables? TryLoad(IMemorySource source, ulong moduleBase)
@@ -620,6 +666,28 @@ public sealed class SkillTables
     private int[] Abilities(int group) => Enumerable.Range(0, 22).Select(position =>
         commands[group * 25 + 3 + position] + (Learned(commands, group * 25, position) ? 256 : 0)).ToArray();
 
+    // Verified build 24304444 (SHA256 937233f7...6b5d5), read-only check 2026-10-26:
+    // RVA 0x2864AC uses the base character as the k=0 job (128/129 -> Squire);
+    // 0x28682D -> 0x2B8F18 maps special jobs to learned bitmap index 0.
+    // These nine identities were also present in the live roster after changing to
+    // ordinary jobs. Values below are JOB_DATA[base * 49].JobCommandId, not names
+    // or the equipped secondary value. Other story identities remain read-only.
+    private static int VerifiedBaseGroup(int identity) => identity switch
+    {
+        1 => 25,                 // Ramza (previously verified story stage)
+        128 or 129 => 5,          // Generic male/female -> job 0x4A
+        0x0D => 74,               // Orlandeau -> Swordplay
+        0x0F => 43,               // Reis -> Dragon (not monster Breath, 44)
+        0x16 => 38,               // Mustadio -> Aimed Shot (not NPC groups 37/68)
+        0x1A => 46,               // Marach -> Nether Mantra
+        0x1E => 40,               // Agrias -> Holy Sword
+        0x1F => 69,               // Beowulf -> Spellblade
+        0x29 => 50,               // Rapha -> Sky Mantra
+        0x2A => 67,               // Meliadoul -> Unyielding Blade
+        0x32 => 41,               // Cloud -> Limit
+        _ => -1
+    };
+
     public UnitSkillRules? ReadUnit(byte[] unit)
     {
         if (unit.Length < FftLayout.UnitSize || unit[FftLayout.Job] >= 174)
@@ -628,9 +696,15 @@ public sealed class SkillTables
         var primary = jobs[currentJob * 49];
         var innate = new[] { 1, 3, 5, 7 }.Select(offset =>
             (int)BinaryPrimitives.ReadUInt16LittleEndian(jobs.AsSpan(currentJob * 49 + offset))).ToArray();
-        // 未验证角色、剧情阶段、怪物及扩展职业只显示槽值，不开放候选。
-        var supported = unit[0] is 1 or 128 or 129
-            && (currentJob is >= 0x4A and <= 0x5D || unit[0] == 1 && currentJob == 1)
+        // k=0 belongs to this character's base job even after changing jobs.
+        // Never reinterpret another character's k=0 as Dragon/Aimed Shot, nor
+        // infer learning from an already-equipped special command.
+        var baseJob = unit[0] is 128 or 129 ? 0x4A : unit[0];
+        var expectedBaseGroup = VerifiedBaseGroup(unit[0]);
+        var supported = expectedBaseGroup > 0 && baseJob < 174
+            && jobs[baseJob * 49] == expectedBaseGroup
+            && (unit[4] & 0x20) == 0 // Monster flag: no human skill editing.
+            && (currentJob is >= 0x4A and <= 0x5D || currentJob == baseJob)
             && primary is > 0 and < 176;
         var learnedJobs = new List<SkillJob>();
         var secondary = new List<int>();
@@ -638,7 +712,7 @@ public sealed class SkillTables
             return new UnitSkillRules(primary, learnedJobs, secondary, innate, false);
         for (var index = 0; index < 20; index++)
         {
-            var job = index == 0 && unit[0] == 1 ? 1 : 0x4A + index;
+            var job = index == 0 ? baseJob : 0x4A + index;
             var group = jobs[job * 49];
             if (group >= 176)
                 return new UnitSkillRules(primary, [], [], innate, false);
@@ -654,7 +728,30 @@ public sealed class SkillTables
                     && Learned(unit, FftLayout.LearnedSkills + index * 3, position)).Any())
                 secondary.Add(group);
         }
-        return new UnitSkillRules(primary, learnedJobs, secondary, innate, true);
+        return new UnitSkillRules(primary, learnedJobs, secondary, innate, true)
+            { HackSecondary = verifiedHumanCommands.Where(group => group != primary).ToArray(),
+                Learning = ReadLearning(unit, primary) };
+    }
+
+    private SkillLearningPlan? ReadLearning(byte[] unit, int primary)
+    {
+        var group = unit[FftLayout.SecondarySkill];
+        if (group == 0 || group == primary || !verifiedHumanCommands.Contains(group)) return null;
+        var index = group is >= 5 and <= 23 ? group - 5 : 0;
+        var offset = FftLayout.LearnedSkills + index * 3;
+        var actions = new List<LearningAction>();
+        ushort mask = 0;
+        var abilities = Abilities(group);
+        for (var position = 0; position < 16; position++)
+        {
+            var id = abilities[position]; // Includes low byte 0 + ninth bit = 256.
+            if (id == 0) continue;
+            if (id >= 0x1A6) return null;
+            mask |= (ushort)((0x80 >> (position % 8)) << (8 * (position / 8)));
+            actions.Add(new LearningAction(position, id, Learned(unit, offset, position)));
+        }
+        return actions.Count == 0 ? null : new SkillLearningPlan(group, index,
+            BinaryPrimitives.ReadUInt16LittleEndian(unit.AsSpan(offset)), unit[offset + 2], mask, tableFingerprint, actions);
     }
 }
 

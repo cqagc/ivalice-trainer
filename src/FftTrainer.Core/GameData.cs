@@ -163,6 +163,13 @@ public sealed class GameTextCatalog
 {
     private Dictionary<string, Dictionary<int, TextEntry>> tables = [];
     private Dictionary<int, string> commands = [];
+    private Dictionary<int, string> descriptions = [];
+    private IReadOnlyDictionary<int, EquipmentStats>? equipment;
+
+    internal void LoadEquipment(IReadOnlyDictionary<int, EquipmentStats>? data) => equipment = data;
+    public EquipmentStats? ItemStats(int id) => equipment?.GetValueOrDefault(id);
+    public string ItemDescription(int id) => descriptions.GetValueOrDefault(id) ?? "";
+
     private sealed record TextEntry(string Name, string? Category);
 
     public bool IsEmpty => tables.Count == 0;
@@ -184,6 +191,8 @@ public sealed class GameTextCatalog
         }
         tables = next;
         commands = nextCommands;
+        descriptions = data?.ItemDescriptions?.ToDictionary(pair => pair.Key,
+            pair => GameTextData.CleanDescription(pair.Value)) ?? [];
     }
 
     // 测试数据：与旧版 assets/text/*.json 同格式（id、name，jobs 可带 jobCommandId/jobCommandName，items 可带 categoryName）
@@ -193,6 +202,8 @@ public sealed class GameTextCatalog
         if (document.RootElement.ValueKind != JsonValueKind.Array)
             return;
         var entries = new Dictionary<int, TextEntry>();
+        if (table == "items")
+            descriptions = [];
         foreach (var entry in document.RootElement.EnumerateArray())
         {
             if (entry.ValueKind != JsonValueKind.Object || !entry.TryGetProperty("id", out var id)
@@ -201,6 +212,8 @@ public sealed class GameTextCatalog
             if (table == "jobs" && entry.TryGetProperty("jobCommandId", out var command)
                 && command.ValueKind == JsonValueKind.Number && command.TryGetInt32(out var commandId) && Text(entry, "jobCommandName") is { Length: > 0 } commandName)
                 commands[commandId] = commandName;
+            if (table == "items" && GameTextData.CleanDescription(Text(entry, "description")) is { Length: > 0 } description)
+                descriptions[key] = description;
             var name = Text(entry, "name");
             if (!string.IsNullOrWhiteSpace(name))
                 entries[key] = new TextEntry(name, Text(entry, "categoryName"));
@@ -311,6 +324,10 @@ public sealed record SkillIdentity(byte Character, byte Marker, byte Job, ushort
 public sealed record UnitSkillRules(int Primary, IReadOnlyList<SkillJob> Jobs,
     IReadOnlyList<int> Secondary, IReadOnlyList<int> Innate, bool Supported)
 {
+    // Separate from normal learned/identity rules; populated only from verified human tables.
+    public IReadOnlyList<int> HackSecondary { get; init; } = [];
+    public SkillLearningPlan? Learning { get; init; }
+
     public IEnumerable<int> Candidates(SkillSlot slot) => new[] { 0 }.Concat(slot == SkillSlot.Secondary
         ? Secondary : Jobs.SelectMany(job => job.Learned).Where(id => Matches(slot, id) && !Innate.Contains(id)))
         .Distinct().Order();

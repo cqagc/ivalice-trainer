@@ -15,10 +15,10 @@ namespace FftTrainer.App;
 
 public partial class MainWindow : Window
 {
-    private readonly GameSession session;
     private readonly TrainerViewModel model;
     private bool closing;
     private UnitViewModel? skillPickerUnit;
+    private UnitViewModel? learningPickerUnit;
     private HwndSource? windowSource;
 
     public MainWindow()
@@ -28,7 +28,7 @@ public partial class MainWindow : Window
         Localizer.Instance.SetLanguage(UiLanguages.Find(settings.Language)
             ?? UiLanguages.FromCulture(System.Globalization.CultureInfo.CurrentUICulture));
         var layout = new FftLayout();
-        session = new GameSession(layout);
+        var session = new GameSession(layout);
         // 游戏文本从玩家本机的游戏目录读（不随修改器分发）：先按 Steam 库找，连上游戏后以进程路径为准
         var text = new GameTextCatalog();
         var gameText = new GameTextService(text, GameTextService.DefaultCacheDirectory);
@@ -36,21 +36,46 @@ public partial class MainWindow : Window
         gameText.Load(Localizer.Instance.Language);
         model = new TrainerViewModel(session, layout, text, new SaveBackups(),
             BattlePreferences.DefaultPath, gameText);
+        InitializeView();
+        session.SnapshotChanged += OnSnapshot;
+        Loaded += (_, _) => session.Start();
+        Closed += (_, _) =>
+        {
+            session.SnapshotChanged -= OnSnapshot;
+            session.Dispose();
+        };
+    }
+
+    // Test-only construction uses the real XAML and handlers, but never creates or
+    // starts GameSession, probes Steam, reads preferences, or creates backups.
+    internal MainWindow(TrainerViewModel model)
+    {
+        this.model = model;
+        InitializeView();
+    }
+
+    private void InitializeView()
+    {
         DataContext = model;
         InitializeComponent();
         LanguageList.ItemsSource = UiLanguages.All;
         ApplyLanguage(Localizer.Instance.Language);
         AddHandler(Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(BeginEdit));
         AddHandler(Keyboard.LostKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(EndEdit));
-        session.SnapshotChanged += OnSnapshot;
-        Loaded += (_, _) => session.Start();
         Closed += (_, _) =>
         {
             windowSource?.RemoveHook(WindowProc);
+            foreach (var unit in model.Units) unit.ResetSkillHacks();
             closing = true;
-            session.SnapshotChanged -= OnSnapshot;
-            session.Dispose();
         };
+    }
+
+    private void KeepFocusedInventoryRow(object sender, CleanUpVirtualizedItemEventArgs e)
+    {
+        // A focused stepper must not be rebound to another item's field. At most one
+        // offscreen row is pinned until keyboard focus leaves it; the rest recycle.
+        if (e.UIElement.IsKeyboardFocusWithin)
+            e.Cancel = true;
     }
 
     private void ApplyLanguage(UiLanguage language)
@@ -159,30 +184,71 @@ public partial class MainWindow : Window
                     && (!model.CanEdit || model.SelectedUnit != skillPickerUnit
                         || SkillPicker.DataContext is not SkillSlotViewModel { CanChange: true }))
                     HideSkillPicker();
+                if (LearningPicker.Visibility == Visibility.Visible
+                    && (!model.CanEdit || model.SelectedUnit != learningPickerUnit
+                        || learningPickerUnit?.Learning.Preview == null))
+                    HideLearningPicker();
             }
         });
     }
 
-    private static void BeginEdit(object sender, KeyboardFocusChangedEventArgs e)
+    private FrameworkElement? editingElement;
+    private object? editingContext;
+
+    private void ClearEditingContext()
     {
-        if (e.NewFocus is FrameworkElement { DataContext: EditableField field })
+        if (editingContext is EditableField field)
+            field.IsEditing = false;
+        if (editingContext is StatViewModel stat)
+            stat.Raw.IsEditing = false;
+        editingElement = null;
+        editingContext = null;
+    }
+
+    private void BeginEdit(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        // A removed visual may never route LostKeyboardFocus back to this window.
+        ClearEditingContext();
+        editingElement = e.NewFocus as FrameworkElement;
+        editingContext = editingElement?.DataContext;
+        if (editingContext is EditableField field)
             field.IsEditing = true;
-        if (e.NewFocus is FrameworkElement { DataContext: StatViewModel stat })
+        if (editingContext is StatViewModel stat)
             stat.Raw.IsEditing = true;
     }
 
-    private static void EndEdit(object sender, KeyboardFocusChangedEventArgs e)
+    private void EndEdit(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (e.OldFocus is FrameworkElement { DataContext: EditableField field })
-            field.IsEditing = false;
-        if (e.OldFocus is FrameworkElement { DataContext: StatViewModel stat })
-            stat.Raw.IsEditing = false;
-        if (e.OldFocus is TextBox textBox)
+        // A delayed event from an unloaded editor must not clear a newer editor.
+        if (!ReferenceEquals(e.OldFocus, editingElement))
+            return;
+        // Never commit an old editor's text into a recycled row's new item.
+        var sameContext = editingElement != null
+            && ReferenceEquals(editingElement.DataContext, editingContext);
+        ClearEditingContext();
+        if (sameContext && e.OldFocus is TextBox textBox)
         {
             textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
             textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateTarget();
         }
     }
+
+    private void ReleaseStepper(object sender)
+    {
+        if (!ReferenceEquals(sender, editingElement))
+            return;
+        // Clear our owner before clearing keyboard focus, so a resulting loss event
+        // cannot push detached text into a new binding. This also covers +/- buttons.
+        ClearEditingContext();
+        if (sender is FrameworkElement { IsKeyboardFocusWithin: true })
+            Keyboard.ClearFocus();
+    }
+
+    private void OnStepperContextChanged(object sender, DependencyPropertyChangedEventArgs e) => ReleaseStepper(sender);
+
+    // Filtering or generation replacement can unload the focused row without a
+    // usable LostKeyboardFocus/DataContextChanged event. Do not wait for either.
+    private void OnStepperUnloaded(object sender, RoutedEventArgs e) => ReleaseStepper(sender);
 
     private void OnTabChanged(object sender, RoutedEventArgs e)
     {
@@ -206,14 +272,17 @@ public partial class MainWindow : Window
     {
         if (!model.CanEdit || sender is not Button { DataContext: SkillSlotViewModel { CanChange: true } slot })
             return;
+        slot.ResetSecondaryHack();
         skillPickerUnit = model.SelectedUnit;
         SkillPicker.DataContext = slot;
         SkillPicker.Visibility = Visibility.Visible;
         CloseSkillPickerButton.Focus();
     }
 
-    private void HideSkillPicker()
+    private void HideSkillPicker(bool keepSelection = false)
     {
+        if (!keepSelection && SkillPicker.DataContext is SkillSlotViewModel slot)
+            slot.ResetSecondaryHack();
         SkillPicker.Visibility = Visibility.Collapsed;
         SkillPicker.DataContext = null;
         skillPickerUnit = null;
@@ -226,11 +295,41 @@ public partial class MainWindow : Window
         if (model.CanEdit && model.SelectedUnit == skillPickerUnit
             && SkillPicker.DataContext is SkillSlotViewModel slot
             && sender is Button { DataContext: SkillCandidate candidate } && slot.Select(candidate.Id))
-            HideSkillPicker();
+            HideSkillPicker(keepSelection: true);
+    }
+
+    private void OpenLearningPicker(object sender, RoutedEventArgs e)
+    {
+        if (!model.CanEdit || model.SelectedUnit is not { } unit || !unit.Learning.BeginPreview()) return;
+        learningPickerUnit = unit;
+        LearningPicker.DataContext = unit.Learning;
+        LearningPicker.Visibility = Visibility.Visible;
+        CancelLearningButton.Focus();
+    }
+
+    private void HideLearningPicker(bool keepSelection = false)
+    {
+        if (!keepSelection) learningPickerUnit?.Learning.Reset();
+        LearningPicker.Visibility = Visibility.Collapsed;
+        LearningPicker.DataContext = null;
+        learningPickerUnit = null;
+    }
+
+    private void CloseLearningPicker(object sender, RoutedEventArgs e) => HideLearningPicker();
+
+    private void StageLearning(object sender, RoutedEventArgs e)
+    {
+        if (learningPickerUnit is { } unit && model.StageLearning(unit)) HideLearningPicker(keepSelection: true);
     }
 
     private async void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (LearningPicker.Visibility == Visibility.Visible)
+        {
+            if (e.Key == Key.Escape) HideLearningPicker();
+            if (e.Key == Key.Escape || e.Key == Key.S && (Keyboard.Modifiers & ModifierKeys.Control) != 0) e.Handled = true;
+            return;
+        }
         if (SkillPicker.Visibility == Visibility.Visible)
         {
             if (e.Key == Key.Escape)
@@ -271,24 +370,30 @@ public partial class MainWindow : Window
         }
         if (!model.CanEdit || !model.HasChanges)
             return;
+        var confirmationEdits = model.Pending.Select(field => field.ToEdit()).ToArray();
         var confirmed = false;
         if (model.NeedsConfirmation)
         {
             var changes = string.Join("\n", model.Pending.Where(field => field.IsDanger)
                 .Select(field => field.ChangeText));
-            confirmed = new DangerDialog(changes) { Owner = this }.ShowDialog() == true;
+            confirmed = new DangerDialog(changes, confirmationEdits.Any(edit => edit.SecondaryHack != null),
+                model.Pending.Any(field => field.IsDanger && field.Key is "Brave" or "Faith"),
+                model.Pending.Any(field => field.Key == "Learn"))
+                { Owner = this }.ShowDialog() == true;
             if (!confirmed)
                 return;
         }
-        await model.WriteAsync(confirmed);
+        // Modal dialogs pump snapshots. Never apply confirmation to changed edits
+        // or a freshly issued Hack capability after reconnecting/changing modes.
+        await model.WriteAsync(confirmed, confirmationEdits);
     }
 }
 
 internal sealed class DangerDialog : Window
 {
-    public DangerDialog(string changes)
+    public DangerDialog(string changes, bool secondaryHack = false, bool departureRisk = true, bool learning = false)
     {
-        Title = Localizer.T("ui.leaveRisk.title");
+        Title = Localizer.T(learning ? "ui.learn.title" : secondaryHack ? "ui.secondaryHackRisk.title" : "ui.leaveRisk.title");
         Width = 500;
         SizeToContent = SizeToContent.Height;
         MaxHeight = 650;
@@ -310,7 +415,7 @@ internal sealed class DangerDialog : Window
         var panel = new StackPanel { Margin = new Thickness(26) };
         panel.Children.Add(new TextBlock
         {
-            Text = Localizer.T("ui.leaveRisk.heading"),
+            Text = Localizer.T(learning ? "ui.learn.title" : secondaryHack ? "ui.secondaryHackRisk.title" : "ui.leaveRisk.heading"),
             FontFamily = new FontFamily(language.SerifFonts),
             Foreground = (Brush)FindResource("Seal"),
             FontSize = 22,
@@ -318,7 +423,9 @@ internal sealed class DangerDialog : Window
         });
         panel.Children.Add(new TextBlock
         {
-            Text = Localizer.T("ui.leaveRisk.body"),
+            Text = (departureRisk ? Localizer.T("ui.leaveRisk.body") : "")
+                + (secondaryHack ? (departureRisk ? "\n\n" : "") + Localizer.T("core.skill.hackWarning") : "")
+                + (learning ? "\n\n" + Localizer.T("core.learn.warning") : ""),
             TextWrapping = TextWrapping.Wrap,
             FontSize = 13,
             Margin = new Thickness(0, 0, 0, 16)

@@ -57,7 +57,7 @@ It supports the **enhanced mode (`FFT_enhanced.exe`)** on Windows 10 / 11 x64. T
 > This is an unofficial fan-made tool and is not affiliated with SQUARE ENIX. Editing game memory can corrupt saves. The trainer backs up your save folder before writing, but keep your own backups too.
 
 > [!NOTE]
-> Memory addresses are verified against Steam build 24304444. After a game update the trainer may stop reading data or refuse to write until it is updated. The current version is **0.1.0**.
+> Memory addresses are verified against Steam build 24304444. After a game update the trainer may stop reading data or refuse to write until it is updated. The current version is **0.2.0**.
 
 ---
 
@@ -81,8 +81,10 @@ Click an image to view it at full size.
 |---|---|
 | Units | Gil, level and EXP, Bravery and Faith, and base stats. Leveling up applies the current job's stat growth. |
 | Job JP | Grants JP per job the way the game does: current JP and total JP both increase, and job level follows the game's thresholds. |
-| Abilities | Secondary, reaction, support and movement slots. Only abilities the unit has learned are offered. |
-| Items | Item counts, including bonus items and carcasses, with search and category filters. |
+| Abilities | Normal mode offers learned, eligible abilities, including verified unique commands for nine additional characters. Experimental cross-character secondary commands are off by default and do not teach actions. |
+| Learn secondary actions | Separate experimental preview for the currently equipped secondary command: actual action names/IDs, existing and new bits, target region, and a second write confirmation. See the safety notes below. |
+| Items | Searchable, filtered inventory with recycled virtual rows and batched updates. Pending quantities show `old → new` beside the name and highlight the whole row. |
+| Equipment details | Official descriptions from local game files and verified static EXE stats. Unknown fields stay unknown; weapon power is not final damage. |
 | Battle: survival | Lock party HP, lock guest HP, infinite party MP, freeze the KO countdown. |
 | Battle: actions | Lock party CT, fill party CT, always move, always act, max Move / Jump, instant casting. |
 | Multipliers | 2× / 5× / 10× EXP and JP, applied only to what the game actually awards to your party. |
@@ -102,7 +104,18 @@ Unit, job, item and ability names are read at runtime from the game files on you
 2. Download the zip from [GitHub Releases](https://github.com/cqagc/ivalice-trainer/releases/latest) and extract it.
 3. Run `FftTrainer.App.exe`, then start the game. The trainer connects automatically.
 
-Return to the world map or the unit list before writing unit edits; changes written while a shop or the unit screen is open can be overwritten by the game when you leave it. Use the language menu in the title bar to switch languages.
+Return to the world map before writing unit edits; changes written while a shop or the unit screen is open can be overwritten by the game when you leave it. Use the language menu in the title bar to switch languages. When upgrading, preserve your own `assets` folder. Local portrait-index corrections do not add or redistribute copyrighted game portraits in the release.
+
+### 0.2.0 experimental skill safety
+
+- Normal skill selection adds verified character-specific commands for Orlandeau, Reis, Mustadio, Marach, Agrias, Beowulf, Rapha, Meliadoul and Cloud. Unverified identities remain read-only. The separate **cross-character secondary Hack** is off by default, offers verified human commands only, and changes the command slot—not learned actions. Weapon and action conditions still apply.
+- To learn actions, first write any secondary-command change and refresh. Open the separate learning preview for the **currently equipped** command, inspect the actual action names/IDs and memory region, stage it, then confirm **Write to game** separately. Canceling/reopening the relevant picker, switching units, disconnecting or undoing revokes its authorization; make a fresh selection/preview when required.
+- Learning resolves all 16 action positions with their real IDs, including ninth-bit ID 256. It ORs only nonempty valid action positions into existing learned bits; it does not overwrite existing bits, passive abilities, JP or jobs. Ordinary commands use their own learning index; special commands share **k0**, so other special commands can interpret the same positions as learned. These cross-command effects cannot be isolated.
+- Writes revalidate identity, generation, equipped command, tables, original bytes and all three roster copies, then read back the exact targets. This is **not atomic**: a failure can leave partial changes. There is no automatic learning retry. Read again and inspect rather than repeatedly pressing Write.
+- A reported in-game check showed Swordplay going from 4 to all 11 actions, and Dragon showing all 8 after switching commands. Refreshing required **leaving the entire party/unit menu for the world map, then opening it again**, not merely closing the skill popup. This is not verification of every battle, working copy or save/reload path; the game may overwrite changes.
+- Back up saves independently before experimenting. Undo only cancels pending edits; it does not roll back a completed game write. Existing JP partial-write/retry behavior is not fixed by this release.
+
+Equipment stats are read only from the verified build 24304444 executable. Unsupported EXEs or unverified fields display unknown; shield/accessory evasion, elements and status effects are not inferred. Official descriptions remain independent of numeric-stat availability.
 
 Version 0.1.1 and later include single-instance protection within the same Windows login session: opening another copy requests activation of the existing window instead of starting another trainer. This also applies to copies in different directories. Close older versions before upgrading, because they do not participate in the lock. Window activation remains subject to Windows foreground restrictions.
 
@@ -123,6 +136,8 @@ dotnet run --project tests/FftTrainer.SingleInstance.Harness/FftTrainer.SingleIn
 ```
 
 The single-instance harness uses isolated test lock names and never connects to the game. It checks duplicate launches, cross-directory copies, concurrent startup, normal exit, crash recovery and unresponsive owners.
+
+The Windows-only `tests/FftTrainer.Inventory.Harness/` exercises production XAML with a synthetic roster/session: inventory recycling and editing, `--hack-ui`, and `--learn-ui`. It never attaches to or writes to the game. Run it on an interactive desktop; the inventory scenario moves the pointer and focuses its test window. Skill UI scenarios require `--game-root <installed-game-directory>` for read-only local text and remain offscreen without activation. Pass `--output <results-directory>` to retain local screenshots/results; do not publish these outputs or text caches without a separate privacy and asset review.
 
 | Directory | Contents |
 |---|---|

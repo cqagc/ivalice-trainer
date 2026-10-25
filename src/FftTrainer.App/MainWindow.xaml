@@ -8,9 +8,9 @@
         <DataTemplate x:Key="Stepper">
             <Border BorderBrush="{StaticResource Line2}" BorderThickness="1" CornerRadius="3" Background="{StaticResource Bg}">
                 <StackPanel Orientation="Horizontal">
-                    <Button Content="−" Command="{Binding Decrease}" Style="{StaticResource StepperButton}"/>
-                    <TextBox Style="{StaticResource NumericInput}" Width="52" Height="26" Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"/>
-                    <Button Content="+" Command="{Binding Increase}" Style="{StaticResource StepperButton}"/>
+                    <Button Content="−" Command="{Binding Decrease}" Style="{StaticResource StepperButton}" DataContextChanged="OnStepperContextChanged" Unloaded="OnStepperUnloaded"/>
+                    <TextBox Style="{StaticResource NumericInput}" Width="52" Height="26" Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}" DataContextChanged="OnStepperContextChanged" Unloaded="OnStepperUnloaded"/>
+                    <Button Content="+" Command="{Binding Increase}" Style="{StaticResource StepperButton}" DataContextChanged="OnStepperContextChanged" Unloaded="OnStepperUnloaded"/>
                 </StackPanel>
             </Border>
         </DataTemplate>
@@ -613,6 +613,10 @@
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
                                 </StackPanel>
+                                <StackPanel Margin="0,10,0,0">
+                                    <Button x:Name="OpenLearningButton" Content="{local:Loc ui.learn.open}" Click="OpenLearningPicker" IsEnabled="{Binding Learning.CanPreview}" HorizontalAlignment="Left"/>
+                                    <TextBlock Text="{Binding Learning.Status}" TextWrapping="Wrap" Foreground="{StaticResource Ink3}" FontSize="11" Margin="0,6,0,0"/>
+                                </StackPanel>
                                 <StackPanel Margin="0,22,0,0">
                                     <DockPanel Margin="0,0,0,12">
                                         <TextBlock DockPanel.Dock="Left" Text="◆" Foreground="{StaticResource Seal}" FontSize="10" Margin="0,0,10,0"/>
@@ -1037,11 +1041,54 @@
                                 <TextBlock Grid.Column="3" Text="{local:Loc ui.items.col.quantity}" Style="{StaticResource Muted}"/>
                             </Grid>
                         </Border>
-                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
-                            <ItemsControl ItemsSource="{Binding VisibleItems}">
+                        <!-- The scroll host belongs to the ItemsControl template: its bounded
+                             star row gives VirtualizingStackPanel a finite viewport. -->
+                        <ItemsControl x:Name="InventoryList" Grid.Row="2" ItemsSource="{Binding VisibleItems}"
+                                      VirtualizingPanel.IsVirtualizing="True"
+                                      VirtualizingPanel.VirtualizationMode="Recycling"
+                                      VirtualizingPanel.ScrollUnit="Pixel"
+                                      VirtualizingPanel.CacheLength="1"
+                                      VirtualizingPanel.CacheLengthUnit="Page"
+                                      VirtualizingStackPanel.CleanUpVirtualizedItem="KeepFocusedInventoryRow">
+                            <ItemsControl.Resources>
+                                <Style TargetType="ToolTip" BasedOn="{StaticResource {x:Type ToolTip}}">
+                                    <Setter Property="ContentTemplate">
+                                        <Setter.Value>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding}" MaxWidth="420" TextWrapping="Wrap"/>
+                                            </DataTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ItemsControl.Resources>
+                            <ItemsControl.Template>
+                                <ControlTemplate TargetType="ItemsControl">
+                                    <ScrollViewer x:Name="InventoryScrollHost" CanContentScroll="True" VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </ControlTemplate>
+                            </ItemsControl.Template>
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <VirtualizingStackPanel/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1,0,1,1" Padding="16,10">
+                                        <Border x:Name="InventoryRow" BorderThickness="1,0,1,1" Padding="16,10">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="{StaticResource Panel}"/>
+                                                    <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Quantity.IsDirty}" Value="True">
+                                                            <Setter Property="Background" Value="{StaticResource GoldBg}"/>
+                                                            <Setter Property="BorderBrush" Value="{StaticResource Gold}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="2*"/>
@@ -1049,7 +1096,37 @@
                                                     <ColumnDefinition Width="*"/>
                                                     <ColumnDefinition Width="120"/>
                                                 </Grid.ColumnDefinitions>
-                                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                                <StackPanel VerticalAlignment="Center" Margin="0,0,12,0" ToolTip="{Binding DetailsText}">
+                                                <Grid x:Name="InventoryNameGroup" HorizontalAlignment="Left">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock x:Name="InventoryItemName" Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding DetailsText}" VerticalAlignment="Center"/>
+                                                    <TextBlock x:Name="InventoryQuantityChange" Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                               Foreground="{StaticResource Gold}" FontFamily="{StaticResource Mono}" FontSize="11"
+                                                               Visibility="{Binding Quantity.IsDirty, Converter={StaticResource BoolVisibility}}">
+                                                        <TextBlock.Text>
+                                                            <MultiBinding StringFormat="{}{0} → {1}">
+                                                                <Binding Path="Quantity.Original"/>
+                                                                <Binding Path="Quantity.Value"/>
+                                                            </MultiBinding>
+                                                        </TextBlock.Text>
+                                                    </TextBlock>
+                                                </Grid>
+                                                <TextBlock x:Name="InventoryStatSummary" Text="{Binding StatSummary}" FontSize="11"
+                                                           TextTrimming="CharacterEllipsis" Margin="0,3,0,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding StatSummary}" Value="">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                </StackPanel>
                                                 <TextBlock Grid.Column="1" Text="{Binding Category}" Style="{StaticResource Muted}"/>
                                                 <TextBlock Grid.Column="2" Text="{Binding HexId}" Style="{StaticResource Muted}" FontFamily="{StaticResource Mono}"/>
                                                 <ContentControl Grid.Column="3" Content="{Binding Quantity}" ContentTemplate="{StaticResource Stepper}" HorizontalAlignment="Left"/>
@@ -1057,8 +1134,7 @@
                                         </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        </ItemsControl>
                     </Grid>
                 </Grid>
                 <Border Background="{StaticResource Bg}">
@@ -1162,7 +1238,7 @@
                     </Button>
                 </Grid>
             </Border>
-            <Border x:Name="SkillPicker" Grid.RowSpan="4" Panel.ZIndex="20" Background="#C00F0B09" Visibility="Collapsed" KeyboardNavigation.TabNavigation="Cycle">
+            <Border x:Name="SkillPicker" Grid.RowSpan="4" Panel.ZIndex="20" Background="#C00F0B09" Visibility="Collapsed" KeyboardNavigation.TabNavigation="Cycle" IsEnabled="{Binding DataContext.CanEdit, RelativeSource={RelativeSource AncestorType=Window}}">
                 <Border Width="500" MaxHeight="580" Margin="24" Padding="24" VerticalAlignment="Center" Background="{StaticResource Panel}" BorderBrush="{StaticResource Gold}" BorderThickness="1">
                     <Grid>
                         <Grid.RowDefinitions>
@@ -1174,7 +1250,13 @@
                         <TextBlock FontFamily="{DynamicResource Serif}" FontSize="22">
                             <Run Text="{local:Loc ui.picker.titlePrefix}"/><Run Text="{Binding Name, Mode=OneWay}"/>
                         </TextBlock>
-                        <TextBlock Grid.Row="1" Text="{local:Loc ui.picker.hint}" Foreground="{StaticResource Ink3}" Margin="0,10,0,16"/>
+                        <StackPanel Grid.Row="1" Margin="0,10,0,16">
+                            <TextBlock Text="{local:Loc ui.picker.hint}" Foreground="{StaticResource Ink3}"/>
+                            <StackPanel Visibility="{Binding IsSecondary, Converter={StaticResource BoolVisibility}}">
+                                <CheckBox Content="{local:Loc ui.picker.secondaryHack}" IsChecked="{Binding SecondaryHackEnabled, Mode=TwoWay}" Margin="0,10,0,6"/>
+                                <TextBlock Text="{local:Loc ui.picker.secondaryHackHint}" TextWrapping="Wrap" Foreground="{StaticResource Ink3}" FontSize="11"/>
+                            </StackPanel>
+                        </StackPanel>
                         <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                             <ItemsControl ItemsSource="{Binding Candidates}">
                                 <ItemsControl.ItemTemplate>
@@ -1190,6 +1272,37 @@
                             </ItemsControl>
                         </ScrollViewer>
                         <Button x:Name="CloseSkillPickerButton" Grid.Row="3" Content="{local:Loc ui.picker.cancel}" Click="CloseSkillPicker" HorizontalAlignment="Right" Margin="0,16,0,0"/>
+                    </Grid>
+                </Border>
+            </Border>
+            <Border x:Name="LearningPicker" Grid.RowSpan="4" Panel.ZIndex="21" Background="#C00F0B09" Visibility="Collapsed"
+                    KeyboardNavigation.TabNavigation="Cycle" IsEnabled="{Binding DataContext.CanEdit, RelativeSource={RelativeSource AncestorType=Window}}">
+                <Border Width="650" MaxHeight="700" Margin="24" Padding="24" VerticalAlignment="Center" Background="{StaticResource Panel}" BorderBrush="{StaticResource Gold}" BorderThickness="1">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="{local:Loc ui.learn.title}" FontSize="22" TextWrapping="Wrap" FontFamily="{DynamicResource Serif}"/>
+                            <TextBlock Text="{Binding Title}" FontSize="16" Margin="0,8,0,0"/>
+                            <TextBlock Text="{Binding Counts}" Margin="0,6,0,0"/>
+                            <TextBlock Text="{Binding Region}" FontFamily="{StaticResource Mono}" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <TextBlock Grid.Row="1" Text="{Binding Warning}" TextWrapping="Wrap" Foreground="{StaticResource Gold}" Margin="0,12,0,12" FontSize="12"/>
+                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl ItemsSource="{Binding Actions}">
+                                <ItemsControl.ItemTemplate><DataTemplate>
+                                    <TextBlock Text="{Binding Text}" TextWrapping="Wrap" Margin="0,3,0,3"/>
+                                </DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                        <StackPanel Grid.Row="3" Margin="0,14,0,0">
+                            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Foreground="{StaticResource Ink3}" FontSize="11"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                                <Button x:Name="CancelLearningButton" Content="{local:Loc ui.picker.cancel}" Click="CloseLearningPicker" Margin="0,0,12,0"/>
+                                <Button x:Name="StageLearningButton" Content="{local:Loc ui.learn.stage}" Click="StageLearning" IsEnabled="{Binding CanStage}"/>
+                            </StackPanel>
+                        </StackPanel>
                     </Grid>
                 </Border>
             </Border>

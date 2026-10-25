@@ -56,7 +56,7 @@ public sealed partial class TrainerTests
 
         public IReadOnlyList<WriteResult> Write(long generation, IReadOnlyList<MemoryEdit> edits) =>
             generation == Generation
-                ? GameSession.ApplyEdits(this, WriteBytes, 0, edits)
+                ? GameSession.ApplyEdits(this, WriteBytes, 0, edits, generation: generation)
                 : edits.Select(edit => new WriteResult(edit, "连接已变化")).ToArray();
 
         public GameSnapshot Snapshot(FftLayout? layout = null) =>
