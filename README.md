@@ -6,6 +6,8 @@
 
 **A free trainer and cheat tool for FFT: The Ivalice Chronicles (FINAL FANTASY TACTICS) on PC. No ads, no account.**
 
+<p align="center"><a href="https://www.cqagc.com/en/open-source/ivalice-trainer"><strong>Ivalice Trainer official page</strong></a> — features, known limits and downloads</p>
+
 <p align="center">
   <strong>English</strong> |
   <a href="README.zh_CN.md">简体中文</a> |
@@ -210,6 +212,6 @@ If you find Ivalice Trainer useful, consider starring the project.
 
 **[Download latest](https://github.com/cqagc/ivalice-trainer/releases/latest)** • **[Report an issue](https://github.com/cqagc/ivalice-trainer/issues)**
 
-Maintained by [CQAGC](https://www.cqagc.com)
+Maintained by [Chongqing HongChuangDa Technology (CQAGC)](https://www.cqagc.com/en/about) · [More free tools](https://www.cqagc.com/en/open-source)
 
 </div>

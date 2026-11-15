@@ -6,6 +6,8 @@
 
 **《最終幻想戰略版 伊瓦利斯編年史》（FFT: The Ivalice Chronicles）PC 修改器，免費開源，無廣告，不需要帳號。**
 
+<p align="center"><a href="https://www.cqagc.com/zh-Hant/open-source/ivalice-trainer"><strong>Ivalice Trainer 官網介紹</strong></a> — 功能、已知限制與下載</p>
+
 <p align="center">
   <a href="README.md">English</a> |
   <a href="README.zh_CN.md">简体中文</a> |
@@ -205,6 +207,6 @@ Ivalice Trainer 以 [MIT](LICENSE) 許可證釋出。第三方元件保留各自
 
 **[下載最新版](https://github.com/cqagc/ivalice-trainer/releases/latest)** • **[反饋問題](https://github.com/cqagc/ivalice-trainer/issues)**
 
-由 [CQAGC](https://www.cqagc.com) 維護
+由 [重慶弘創達科技（CQAGC）](https://www.cqagc.com/zh-Hant/about) 維護 · [更多免費工具](https://www.cqagc.com/zh-Hant/open-source)
 
 </div>
