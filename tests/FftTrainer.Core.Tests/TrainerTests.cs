@@ -2561,16 +2561,20 @@ public sealed partial class TrainerTests
         memory.Seed(0, dos);
         var pe = new byte[24];
         BinaryPrimitives.WriteUInt32LittleEndian(pe, 0x4550);
-        BinaryPrimitives.WriteUInt16LittleEndian(pe.AsSpan(6), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(pe.AsSpan(6), 3);
         BinaryPrimitives.WriteUInt16LittleEndian(pe.AsSpan(20), 0xF0);
         memory.Seed(0x80, pe);
-        var sections = new byte[80];
+        var sections = new byte[120];
         for (var i = 0; i < 2; i++)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(sections.AsSpan(i * 40 + 12), (uint)(0x900000 + i * 0x100000));
             BinaryPrimitives.WriteUInt32LittleEndian(sections.AsSpan(i * 40 + 16), 0x10000);
             BinaryPrimitives.WriteUInt32LittleEndian(sections.AsSpan(i * 40 + 20), (uint)(0x780000 + i * 0x80000));
         }
+        // Third section: the .rdata range holding the enhanced-only item tables.
+        BinaryPrimitives.WriteUInt32LittleEndian(sections.AsSpan(80 + 12), 0xB00000);
+        BinaryPrimitives.WriteUInt32LittleEndian(sections.AsSpan(80 + 16), 0x10000);
+        BinaryPrimitives.WriteUInt32LittleEndian(sections.AsSpan(80 + 20), 0x670000);
         memory.Seed(0x188, sections);
         void Table(uint file, byte[] bytes) => memory.Seed(PeFileMap.Read(memory, 0).ToRva(file, bytes.Length), bytes);
         foreach (var (id, values) in new (int, byte[])[]

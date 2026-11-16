@@ -3,14 +3,30 @@ using System.Text.Json;
 
 namespace FftTrainer.Core;
 
+public enum UnitGender
+{
+    Male, Female, Monster
+}
+
 public static class GameData
 {
     // JP 索引 20、21 为未使用空槽，不显示、不写入。
     public static bool IsJobHidden(int index) => index is 20 or 21;
 
-    public static bool IsJobAvailable(int index, byte character) => !IsJobHidden(index)
-        && (index != 17 || character != 0x81)
-        && (index != 18 || character == 0x81);
+    // 吟游诗人（17）不给女性，舞者（18）只给女性；怪物两者都不给。
+    public static bool IsJobAvailable(int index, UnitGender gender) => !IsJobHidden(index)
+        && (index != 17 || gender != UnitGender.Female)
+        && (index != 18 || gender == UnitGender.Female);
+
+    // 性别标志：名册 +0x04、战斗槽 +0x06，0x80 男 / 0x40 女 / 0x20 怪物（另有 0x10 等位，与性别无关）。
+    // 特殊角色的角色码不是 0x80/0x81（2026-11-16 实机：美莉娅多角色码 0x2A、标志 0x50 = 女），
+    // 只看角色码会把特殊女性角色当成男性。标志全空（不应出现）时才退回按角色码判断。
+    public static UnitGender Gender(byte flags, byte character) =>
+        (flags & 0x20) != 0 ? UnitGender.Monster
+        : (flags & 0x40) != 0 ? UnitGender.Female
+        : (flags & 0x80) != 0 ? UnitGender.Male
+        : character == 0x82 ? UnitGender.Monster
+        : character == 0x81 ? UnitGender.Female : UnitGender.Male;
 
     // 名称一律来自游戏文本（GameTextCatalog，运行时从玩家本机的游戏封包读取）；这里只剩读不到时的编号兜底
     public static string UnitName(int id) => Localizer.F("core.fallback.unit", id);
@@ -71,6 +87,9 @@ public sealed class PortraitCatalog
 {
     private readonly List<string> roots = [];
     private readonly List<(PortraitIdentity Identity, string Root, string? Face, string? Job)> mappings = [];
+    // 特殊角色码 → 头像（运行时提取生成的 specialFaces）；有这张表的目录不再按 wldface_{角色码} 猜
+    private readonly List<(byte Code, string Root, string Face)> specialFaces = [];
+    private readonly HashSet<string> rootsWithSpecialFaces = [];
 
     public static PortraitCatalog Load(string executableDirectory, string localAppData,
         Func<string, string>? readText = null)
@@ -111,6 +130,12 @@ public sealed class PortraitCatalog
             mappings.Add((new PortraitIdentity(characterCode, jobId, gender), root,
                 Text(entry, "face"), Text(entry, "jobIllustration")));
         }
+        if (!document.RootElement.TryGetProperty("specialFaces", out var special) || special.ValueKind != JsonValueKind.Array)
+            return;
+        rootsWithSpecialFaces.Add(root);
+        foreach (var entry in special.EnumerateArray())
+            if (HexByte(Text(entry, "characterCode"), out var code) && code < 0x80 && Text(entry, "face") is { } face)
+                specialFaces.Add((code, root, face));
     }
 
     private static string? Text(JsonElement entry, string key) =>
@@ -138,8 +163,12 @@ public sealed class PortraitCatalog
         }
         // 特殊角色默认造型；0x80/0x81 通用兵及怪物仍只使用已核对的映射。
         if (!exact && identity.CharacterCode < 0x80)
-            foreach (var root in roots)
+        {
+            foreach (var entry in specialFaces.Where(entry => entry.Code == identity.CharacterCode))
+                face ??= AssetPath(entry.Root, entry.Face, "face", exists);
+            foreach (var root in roots.Where(root => !rootsWithSpecialFaces.Contains(root)))
                 face ??= AssetPath(root, $"face/wldface_{identity.CharacterCode:000}_08_uitx.png", "face", exists);
+        }
         return new PortraitPaths(face, job);
     }
 

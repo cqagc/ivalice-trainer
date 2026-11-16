@@ -25,6 +25,8 @@ public sealed class FftLayout
     public const int InventoryCount = 0x105;
     public const ulong InventoryLast = 0x11A7D04;
     public const int Character = 0x00;
+    public const int GenderFlags = 0x04;
+    public const int BattleGenderFlags = 0x06;
     public const int SlotMarker = 0x01;
     public const int Job = 0x02;
     public const int NameId = 0x230;
@@ -74,6 +76,7 @@ public sealed record BattleUnit(int Slot, byte[] Data)
     public int? JobLevel => JobIndex < 0 ? null : (Data[0xE4 + JobIndex / 2] >> ((1 - JobIndex % 2) * 4)) & 15;
     public uint? CurrentJp => JobIndex < 0 ? null : Read(0xF0 + JobIndex * 2, 2);
     public uint? TotalJp => JobIndex < 0 ? null : Read(0x11E + JobIndex * 2, 2);
+    public UnitGender Gender => GameData.Gender(Data[FftLayout.BattleGenderFlags], Data[0]);
     public byte Ct => Data[0x41];
     public byte DeathCountdown => Data[0x07];
     public bool IsDown => (Data[0x61] & 0x20) != 0;
@@ -230,7 +233,7 @@ public static class BattleRules
             var next = (after >> shift) & 15;
             var job = (field - 0xE4) * 2 + half;
             if (next > 8 || next < before
-                || !GameData.IsJobAvailable(job, unit.Data[0]) && next != before)
+                || !GameData.IsJobAvailable(job, unit.Gender) && next != before)
                 return false;
         }
         return true;
@@ -268,9 +271,9 @@ public static class BattleRules
             >= 0xE4 and <= 0xED when edit.Width == 1 && unit.Side == BattleSide.Player
                 && ValidJobLevels(unit, field, edit.After) => 0x88u,
             >= 0xF0 and < 0x118 when edit.Width == 2 && (field - 0xF0) % 2 == 0
-                && unit.Side == BattleSide.Player && GameData.IsJobAvailable((field - 0xF0) / 2, unit.Data[0]) => 9999u,
+                && unit.Side == BattleSide.Player && GameData.IsJobAvailable((field - 0xF0) / 2, unit.Gender) => 9999u,
             >= 0x11E and < 0x146 when edit.Width == 2 && (field - 0x11E) % 2 == 0
-                && unit.Side == BattleSide.Player && GameData.IsJobAvailable((field - 0x11E) / 2, unit.Data[0]) => 9999u,
+                && unit.Side == BattleSide.Player && GameData.IsJobAvailable((field - 0x11E) / 2, unit.Gender) => 9999u,
             0x30 when edit.Width == 2 => unit.IsDown || unit.Hp == 0 ? 0u : unit.MaxHp,
             0x34 when edit.Width == 2 => unit.MaxMp,
             0x2A or 0x2C or 0x41 when edit.Width == 1 => 100u,
@@ -370,7 +373,7 @@ public sealed class BattleRewards
             }
             for (var job = 0; job < 20 && JpMultiplier > 1; job++)
             {
-                if (!GameData.IsJobAvailable(job, unit.Data[0]))
+                if (!GameData.IsJobAvailable(job, unit.Gender))
                     continue;
                 var current = unit.Read(0xF0 + job * 2, 2);
                 var total = unit.Read(0x11E + job * 2, 2);

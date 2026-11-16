@@ -51,6 +51,30 @@ public sealed class EquipmentDetailsTests
     }
 
     [Fact]
+    public void EnhancedOnlyItemsUseTheirOwnTables()
+    {
+        // Real records from the supported EXE (see ExtendedItemTests).
+        var bytes = Image();
+        byte[][] commons =
+        [
+            [0x0D, 0x0C, 0x08, 0x82, 0x14, 0x03, 0x00, 0x51, 0x0A, 0x00, 0x01, 0x00],
+            [0x03, 0x5F, 0x05, 0x12, 0x10, 0x15, 0x00, 0x52, 0x0A, 0x00, 0x01, 0x00],
+            [0x0D, 0xB2, 0x06, 0x12, 0x1F, 0x18, 0x00, 0x53, 0x0A, 0x00, 0x01, 0x00],
+            [0x0C, 0x8F, 0x33, 0x0A, 0x0B, 0x1C, 0x00, 0x50, 0x0A, 0x00, 0x01, 0x00]
+        ];
+        for (var i = 0; i < commons.Length; i++)
+            commons[i].CopyTo(bytes, 0x67E910 + (0x101 + i) * 12);
+        new byte[] { 0x01, 0x8E, 0x01, 0xFF, 0x06, 0x0A, 0x00, 0x00 }.CopyTo(bytes, 0x67F500 + 8);
+        new byte[] { 20, 0, 20, 0 }.CopyTo(bytes, 0x6722FC);
+        bytes[0x80E2A0 + 0x51 * 26 + 2] = 1;
+        var table = EquipmentStatsReader.Parse(bytes)!;
+        Assert.Equal(new EquipmentStats(6, 10, null, null, 0, 0, 1, 0, 0), table[0x101]);
+        Assert.Equal(new EquipmentStats(null, null, 20, 0, 0, 0, 0, 0, 0), table[0x102]);
+        Assert.Equal(new EquipmentStats(null, null, 20, 0, 0, 0, 0, 0, 0), table[0x103]);
+        Assert.Equal(new EquipmentStats(null, null, null, null, 0, 0, 0, 0, 0), table[0x104]);
+    }
+
+    [Fact]
     public void ReadsTablesNotJustSixSamplesAndDoesNotConfuseWeaponPowerWithPa()
     {
         var bytes = Image();

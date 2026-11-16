@@ -21,13 +21,21 @@ try
         arguments.RemoveRange(i, 2);
     }
     if (arguments.Count == 0)
-        throw new ArgumentException("Commands: info, scan, next, list, read, write, aob, find-seq, find-str, gametext, gametext-locate.");
+        throw new ArgumentException("Commands: info, scan, next, list, read, write, aob, find-seq, find-str, gametext, gametext-locate, extract-portraits.");
     var command = arguments[0];
     var parameters = arguments.Skip(1).ToArray();
     if (command == "gametext")
         return GameTextCommand(parameters);
     if (command == "gametext-locate")
         return GameTextLocateCommand();
+    if (command == "extract-portraits")
+    {
+        if (parameters.Length != 2)
+            throw new ArgumentException("Usage: extract-portraits <gameRoot> <outDir>");
+        var result = FftTrainer.GameFiles.PortraitExtractor.Extract(parameters[0], parameters[1]);
+        Console.WriteLine($"faces={result.Faces} jobs={result.Jobs} monsters={result.Monsters} mappings={result.Mappings} skipped={result.Skipped} elapsed={result.Elapsed.TotalSeconds:F1}s");
+        return 0;
+    }
     using var process = new GameProcess(processName);
 
     void Require(int minimum, int maximum)

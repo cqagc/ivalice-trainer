@@ -110,6 +110,9 @@ public sealed class GameTextService
 
     public string? GameRoot { get; private set; }
 
+    // 游戏目录变化（含从无到有）时触发，参数是新目录（可能为 null）
+    public event Action<string?>? GameRootChanged;
+
     // 设定游戏根目录；返回 true 表示目录有变化（需要重新 Load）
     public bool SetGameRoot(string? root)
     {
@@ -121,6 +124,7 @@ public sealed class GameTextService
         loadedKey = null;
         catalog.Load(null);
         catalog.LoadEquipment(null);
+        GameRootChanged?.Invoke(root);
         return true;
     }
 

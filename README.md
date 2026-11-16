@@ -59,7 +59,7 @@ It supports the **enhanced mode (`FFT_enhanced.exe`)** on Windows 10 / 11 x64. T
 > This is an unofficial fan-made tool and is not affiliated with SQUARE ENIX. Editing game memory can corrupt saves. The trainer backs up your save folder before writing, but keep your own backups too.
 
 > [!NOTE]
-> Memory addresses are verified against Steam build 24304444. After a game update the trainer may stop reading data or refuse to write until it is updated. The current version is **0.2.0**.
+> Memory addresses are verified against Steam build 24304444. After a game update the trainer may stop reading data or refuse to write until it is updated. The current version is **0.3.0**.
 
 ---
 
@@ -94,7 +94,7 @@ Click an image to view it at full size.
 | Staged writes | Unit and item edits are staged and written together with **Write to game** (Ctrl+S). Each write is checked against the game's current values first. |
 | Save backups | Before writing, the save folder is copied to `%LOCALAPPDATA%\FftTrainer\save-backups` (at most once every 10 minutes, the latest 20 are kept). |
 
-Unit, job, item and ability names are read at runtime from the game files on your machine, in the language you choose. The trainer ships no game text or assets.
+Unit, job, item and ability names, and unit portraits, are read at runtime from the game files on your machine. Names follow the language you choose. Portraits are extracted once into `%LOCALAPPDATA%\FftTrainer\portraits` (about two seconds) and again after a game update. The trainer ships no game text or assets.
 
 ---
 
@@ -106,7 +106,13 @@ Unit, job, item and ability names are read at runtime from the game files on you
 2. Download the zip from [GitHub Releases](https://github.com/cqagc/ivalice-trainer/releases/latest) and extract it.
 3. Run `FftTrainer.App.exe`, then start the game. The trainer connects automatically.
 
-Return to the world map before writing unit edits; changes written while a shop or the unit screen is open can be overwritten by the game when you leave it. Use the language menu in the title bar to switch languages. When upgrading, preserve your own `assets` folder. Local portrait-index corrections do not add or redistribute copyrighted game portraits in the release.
+Return to the world map before writing unit edits; changes written while a shop or the unit screen is open can be overwritten by the game when you leave it. Use the language menu in the title bar to switch languages. On first launch, portraits appear a moment after the trainer finds your game.
+
+### 0.3.0
+
+- Portraits for generic units, special characters and monsters are extracted from your own game files. No separate tools or asset folders are needed.
+- Fixed: units wearing Akademy Blade, Akademy Beret, Akademy Tunic or Ring of Aptitude could not have their level or stats edited.
+- Fixed: special characters such as Agrias and Meliadoul were shown as male and offered Bard instead of Dancer.
 
 ### 0.2.0 experimental skill safety
 

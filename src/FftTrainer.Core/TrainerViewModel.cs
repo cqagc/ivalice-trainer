@@ -267,9 +267,9 @@ public sealed class JobViewModel : ObservableObject
         Jp.RefreshDescription();
     }
 
-    public void RefreshAvailability(byte character)
+    public void RefreshAvailability(UnitGender gender)
     {
-        IsAvailable = GameData.IsJobAvailable(index, character);
+        IsAvailable = GameData.IsJobAvailable(index, gender);
         Notify(nameof(IsAvailable));
         Add100.Refresh();
         Add500.Refresh();
@@ -609,6 +609,16 @@ public sealed class UnitViewModel : ObservableObject
         Gain99.Refresh();
     }
 
+    // 立绘缓存更新后让界面重新取图
+    public void RefreshPortrait() => Notify(nameof(Portrait));
+
+    internal static string PortraitGender(UnitGender gender) => gender switch
+    {
+        UnitGender.Female => "female",
+        UnitGender.Monster => "monster",
+        _ => "male"
+    };
+
     private static uint Read(byte[] data, int offset, int width) => (uint)Values.Bits(data.AsSpan(offset),
         width == 1 ? ValueTypeCode.U8 : width == 3 ? ValueTypeCode.U24 : ValueTypeCode.U16);
 
@@ -616,10 +626,14 @@ public sealed class UnitViewModel : ObservableObject
     {
         Name = text.UnitName((int)Read(data, FftLayout.NameId, 2));
         IsProtagonist = data[FftLayout.Character] == 0x01;
-        var female = data[FftLayout.Character] == 0x81;
-        Gender = Localizer.T(female ? "core.gender.female" : "core.gender.male");
-        var portrait = new PortraitIdentity(data[FftLayout.Character], data[FftLayout.Job],
-            data[FftLayout.Character] == 0x82 ? "monster" : female ? "female" : "male");
+        var gender = GameData.Gender(data[FftLayout.GenderFlags], data[FftLayout.Character]);
+        Gender = Localizer.T(gender switch
+        {
+            UnitGender.Female => "core.gender.female",
+            UnitGender.Monster => "core.gender.monster",
+            _ => "core.gender.male"
+        });
+        var portrait = new PortraitIdentity(data[FftLayout.Character], data[FftLayout.Job], PortraitGender(gender));
         if (Portrait != portrait)
         {
             Portrait = portrait;
@@ -675,7 +689,7 @@ public sealed class UnitViewModel : ObservableObject
         for (var i = 0; i < Jobs.Count; i++)
         {
             Jobs[i].RefreshSkills(snapshot.Skills?.Jobs.FirstOrDefault(job => job.Index == i));
-            Jobs[i].RefreshAvailability(snapshot.Data[FftLayout.Character]);
+            Jobs[i].RefreshAvailability(GameData.Gender(snapshot.Data[FftLayout.GenderFlags], snapshot.Data[FftLayout.Character]));
             Jobs[i].Refresh(i == GameData.JobIndex(snapshot.Data[FftLayout.Job]));
         }
         PrimarySkill = snapshot.Skills is { } skills
@@ -721,6 +735,8 @@ public sealed class BattleUnitViewModel : ObservableObject
     public string JobProgressText => HasKnownJob ? Localizer.F("core.battle.jobProgress", JobLevel, JobNext, JobJp) : Localizer.T("core.battle.uniqueJob");
     public string JobJp => Unit.CurrentJp?.ToString() ?? "—";
     public PortraitIdentity? Portrait { get; }
+
+    public void RefreshPortrait() => Notify(nameof(Portrait));
     public EditableField Ct { get; }
     // 游戏界面把 CT 封顶显示为 100；内存可以超过 100（已攒满、排队待行动）
     public string CtLabel => Unit.Ct >= 100 ? Localizer.T("core.battle.ready") : "";
@@ -739,8 +755,7 @@ public sealed class BattleUnitViewModel : ObservableObject
         this.roster = roster;
         this.text = text;
         RefreshNames();
-        Portrait = new PortraitIdentity(unit.Data[0], unit.Data[3], (unit.Data[6] & 0x20) != 0
-            ? "monster" : unit.Data[0] == 0x81 ? "female" : "male");
+        Portrait = new PortraitIdentity(unit.Data[0], unit.Data[3], UnitViewModel.PortraitGender(unit.Gender));
         EditableField Field(string labelKey, int offset, int width, uint max, uint min = 0) =>
             new("", "Battle", unit.Offset + (ulong)offset, width, min, max, unit.Read(offset, width))
             {
@@ -1123,6 +1138,14 @@ public sealed class TrainerViewModel : ObservableObject
     public RelayCommand MaxVisibleItems { get; }
     public string RosterCountText => $"{Units.Count} / 50";
     public ObservableCollection<UnitViewModel> Units { get; } = [];
+
+    public void RefreshPortraits()
+    {
+        foreach (var unit in Units)
+            unit.RefreshPortrait();
+        foreach (var unit in Allies.Concat(Guests).Concat(Enemies))
+            unit.RefreshPortrait();
+    }
     public ObservableCollection<EditableField> Pending { get; } = [];
     public EditableField Gil { get; } = new("", "Gil", FftLayout.Gil, 4, 0, 99999999, 0, true)
         { LabelSource = () => Localizer.T("core.gil") };

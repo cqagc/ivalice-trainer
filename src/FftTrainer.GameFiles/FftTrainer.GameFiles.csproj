@@ -9,6 +9,8 @@
     <NoWarn>$(NoWarn);CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625;CS8765;CS0168;CS0219;CS1998</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <!-- BC7 解码（运行时提取立绘），MIT OR Unlicense；只用核心包，不引用 BCnEncoder.Net.ImageSharp -->
+    <PackageReference Include="BCnEncoder.Net" Version="2.3.0" />
     <PackageReference Include="CommunityToolkit.HighPerformance" Version="8.4.0" />
     <PackageReference Include="Syroot.BinaryData" Version="5.2.2" />
     <PackageReference Include="Syroot.BinaryData.Memory" Version="5.2.2" />

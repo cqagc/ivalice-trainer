@@ -590,12 +590,13 @@ public sealed class StatTables
             for (var i = 0; i < 7; i++)
             {
                 var id = BinaryPrimitives.ReadUInt16LittleEndian(unit.AsSpan(FftLayout.Equipment + i * 2));
-                if (id == 0xFF)
+                // 与游戏一致：0xFF 是空槽，0x105 及以上不计入属性（RVA 0x277A99）。
+                if (id == 0xFF || id >= ItemTables.End)
                     continue;
-                if (id > 0xFF)
+                var common = Read(ItemTables.CommonOffset(id), 12);
+                if (common[7] >= ItemTables.BonusCount)
                     return null;
-                var common = Read(0x80CE90u + id * 12u, 12);
-                var bonus = Read(0x80E2A0u + common[7] * 26u, 26);
+                var bonus = Read(ItemTables.Bonus + common[7] * 26u, 26);
                 bonuses[3] += bonus[0];
                 bonuses[4] += bonus[1];
                 bonuses[2] += bonus[2];
@@ -603,7 +604,7 @@ public sealed class StatTables
                 jump += bonus[4];
                 if ((common[3] & 0x30) != 0)
                 {
-                    var armor = Read(0x80DEB0u + common[4] * 2u, 2);
+                    var armor = Read(ItemTables.ArmorOffset(id, common), 2);
                     bonuses[0] += armor[0];
                     bonuses[1] += armor[1];
                 }

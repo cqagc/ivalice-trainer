@@ -1,6 +1,6 @@
 # Third-party notices
 
-Ivalice Trainer does not distribute any game content. Job, item, ability and unit names are read at runtime from the game installed on the player's machine. The DirectStorage native libraries used for decompression (`dstorage.dll`, `dstoragecore.dll`) are loaded from the game's install folder and are not redistributed.
+Ivalice Trainer does not distribute any game content. Job, item, ability and unit names are read at runtime from the game installed on the player's machine, and unit portraits are extracted at runtime from the same installation into a local cache (`%LOCALAPPDATA%\FftTrainer\portraits`). The DirectStorage native libraries used for decompression (`dstorage.dll`, `dstoragecore.dll`) are loaded from the game's install folder and are not redistributed.
 
 ## Third-party code included in the source and the program
 
@@ -13,6 +13,7 @@ Ivalice Trainer does not distribute any game content. Job, item, ability and uni
 
 | Package | Version | License | Copyright |
 |---|---|---|---|
+| BCnEncoder.Net | 2.3.0 | MIT OR Unlicense (used under MIT) | Copyright 2020 Nomi Lakkala, https://github.com/Nominom/BCnEncoder.NET |
 | CommunityToolkit.HighPerformance | 8.4.0 | MIT | (c) .NET Foundation and Contributors |
 | Syroot.BinaryData / Syroot.BinaryData.Memory / Syroot.BinaryData.Core | 5.2.2 / 5.2.2 / 5.2.0 | MIT | (c) Syroot |
 | System.IO.Hashing | 10.0.1 | MIT | © Microsoft Corporation |

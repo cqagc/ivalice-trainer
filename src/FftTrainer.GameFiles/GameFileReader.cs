@@ -27,7 +27,7 @@ public sealed record GameTableRow(int Key, IReadOnlyDictionary<string, object?> 
 public static class GameFileReader
 {
     public const string ExecutableName = "FFT_enhanced.exe";
-    private static readonly object Gate = new();
+    internal static readonly object Gate = new();
     private static bool directStorageLoaded;
 
     public static string EnhancedDirectory(string gameRoot) => Path.Combine(gameRoot, "data", "enhanced");
@@ -64,7 +64,7 @@ public static class GameFileReader
         return rows;
     }
 
-    private static void EnsureDirectStorage(string gameRoot)
+    internal static void EnsureDirectStorage(string gameRoot)
     {
         if (directStorageLoaded)
             return;

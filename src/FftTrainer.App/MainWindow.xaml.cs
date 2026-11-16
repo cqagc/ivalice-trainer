@@ -37,6 +37,16 @@ public partial class MainWindow : Window
         model = new TrainerViewModel(session, layout, text, new SaveBackups(),
             BattlePreferences.DefaultPath, gameText);
         InitializeView();
+        // 立绘从玩家自己的游戏封包提取到本机缓存（不随修改器分发），完成后刷新界面
+        var portraits = new PortraitCache(PortraitCache.DefaultDirectory, PortraitLog);
+        portraits.Updated += () => Dispatcher.BeginInvoke(() =>
+        {
+            if (Resources["PortraitImage"] is PortraitConverter converter)
+                converter.Reload();
+            model.RefreshPortraits();
+        });
+        gameText.GameRootChanged += root => portraits.Ensure(root);
+        portraits.Ensure(gameText.GameRoot);
         session.SnapshotChanged += OnSnapshot;
         Loaded += (_, _) => session.Start();
         Closed += (_, _) =>
@@ -44,6 +54,21 @@ public partial class MainWindow : Window
             session.SnapshotChanged -= OnSnapshot;
             session.Dispose();
         };
+    }
+
+    private static void PortraitLog(string message)
+    {
+        try
+        {
+            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "FftTrainer", "portraits.log");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllText(path, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {message}{Environment.NewLine}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 日志写不了不影响使用
+        }
     }
 
     // Test-only construction uses the real XAML and handlers, but never creates or
@@ -466,9 +491,18 @@ internal sealed class DangerDialog : Window
 
 public sealed class PortraitConverter : IValueConverter
 {
-    private readonly PortraitCatalog catalog = PortraitCatalog.Load(AppContext.BaseDirectory,
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+    private PortraitCatalog catalog = LoadCatalog();
     private readonly Dictionary<(PortraitIdentity Identity, string Kind), BitmapSource?> cache = [];
+
+    private static PortraitCatalog LoadCatalog() => PortraitCatalog.Load(AppContext.BaseDirectory,
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+
+    // 立绘缓存更新后重新读映射表并清空已解码的图（含之前缓存的「没有图」）
+    public void Reload()
+    {
+        catalog = LoadCatalog();
+        cache.Clear();
+    }
 
     public object? Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
